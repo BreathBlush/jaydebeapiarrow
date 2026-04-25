@@ -727,7 +727,8 @@ class Cursor(object):
             if isinstance(p, datetime.date):
                 return jpype.JClass("java.sql.Date").valueOf(p.isoformat())
             if isinstance(p, datetime.time):
-                return jpype.JClass("java.sql.Time").valueOf(p.strftime("%H:%M:%S"))
+                return jpype.JClass("java.sql.Time").valueOf(
+                    p.strftime("%H:%M:%S"))
             if isinstance(p, Decimal):
                 return jpype.JClass("java.math.BigDecimal")(str(p))
             if isinstance(p, list):
