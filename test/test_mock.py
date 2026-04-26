@@ -21,6 +21,12 @@ import jaydebeapiarrow
 from datetime import datetime
 from decimal import Decimal
 import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+from functools import partial
 
 try:
     from test._base import _SUPPRESS_LOGGING_ARGS
@@ -1174,3 +1180,93 @@ class MockTest(unittest.TestCase):
     def test_lastrowid_none_after_executemany(self):
         """lastrowid should be None after executemany (mock driver limitation: skip)."""
         self.skipTest("Mock driver executeBatch returns None; covered by integration test")
+
+
+class JarPathSpacesTest(unittest.TestCase):
+    """Tests for JAR file paths containing spaces (issue #86).
+
+    These tests must run in a subprocess because JPype only allows
+    one JVM start per process, and the main test suite already starts it.
+    """
+
+    def _find_mock_jar(self):
+        for root, dirs, files in os.walk(os.path.dirname(__file__)):
+            for f in files:
+                if f.startswith('mockdriver') and f.endswith('.jar'):
+                    return os.path.join(root, f)
+        self.fail('mockdriver JAR not found')
+
+    def _run_connect_in_subprocess(self, jar_path):
+        """Run a connect call in a fresh subprocess and return success/failure."""
+        code = f'''
+import jaydebeapiarrow
+try:
+    conn = jaydebeapiarrow.connect(
+        'org.jaydebeapi.mockdriver.MockDriver',
+        'jdbc:jaydebeapi://dummyurl',
+        jars={repr(jar_path)}
+    )
+    print('OK')
+    conn.close()
+except Exception as e:
+    print(f'FAIL: {{type(e).__name__}}: {{e}}')
+'''
+        result = subprocess.run(
+            [sys.executable, '-c', code],
+            capture_output=True, text=True, timeout=30,
+            cwd=os.path.dirname(os.path.dirname(__file__))
+        )
+        return result.stdout.strip(), result.stderr.strip()
+
+    def test_jar_path_with_spaces(self):
+        """JAR paths containing spaces should work (issue #86)."""
+        mock_jar = self._find_mock_jar()
+        with tempfile.TemporaryDirectory(prefix='path with spaces ') as tmpdir:
+            dest = os.path.join(tmpdir, os.path.basename(mock_jar))
+            shutil.copy2(mock_jar, dest)
+            stdout, stderr = self._run_connect_in_subprocess(dest)
+        self.assertEqual(stdout, 'OK', f'Connection failed: {stderr}')
+
+    def test_jar_path_with_special_chars(self):
+        """JAR paths containing parentheses and special chars should work."""
+        mock_jar = self._find_mock_jar()
+        with tempfile.TemporaryDirectory(prefix='path (x86) & test ') as tmpdir:
+            dest = os.path.join(tmpdir, os.path.basename(mock_jar))
+            shutil.copy2(mock_jar, dest)
+            stdout, stderr = self._run_connect_in_subprocess(dest)
+        self.assertEqual(stdout, 'OK', f'Connection failed: {stderr}')
+
+
+class ParallelConnectTest(unittest.TestCase):
+    """Test that parallel connect() calls are thread-safe (issue #60)."""
+
+    def test_parallel_connects_after_jvm_started(self):
+        """Multiple threads connecting simultaneously should not crash."""
+        errors = []
+
+        def connect_thread(idx):
+            try:
+                conn = jaydebeapiarrow.connect(
+                    'org.jaydebeapi.mockdriver.MockDriver',
+                    'jdbc:jaydebeapi://dummyurl%d' % idx)
+                # Verify the connection is usable
+                self.assertIsNotNone(conn)
+                conn.close()
+            except Exception as e:
+                errors.append(e)
+
+        threads = []
+        for i in range(5):
+            t = threading.Thread(target=partial(connect_thread, i))
+            threads.append(t)
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [], f"Thread errors: {errors}")
+
+    def test_jvm_startup_lock_exists(self):
+        """The _jvm_startup_lock should be a threading.Lock."""
+        self.assertTrue(hasattr(jaydebeapiarrow, '_jvm_startup_lock'))
+        self.assertIsInstance(jaydebeapiarrow._jvm_startup_lock, type(threading.Lock()))
