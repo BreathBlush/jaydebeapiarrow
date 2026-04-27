@@ -1222,7 +1222,6 @@ class MockTest(unittest.TestCase):
         self.conn.jconn.mockAutoCommit(False)
         self.conn.rollback()
 
-
     def test_lastrowid_exists_and_is_none(self):
         """PEP-249: lastrowid attribute must exist on cursor (fixes #84)."""
         with self.conn.cursor() as cursor:
