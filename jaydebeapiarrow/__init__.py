@@ -120,6 +120,7 @@ old_jpype = False
 # deadlocks if JPype spawns threads during initialisation.
 _jvm_startup_lock = threading.Lock()
 _jvm_starting = False
+_jvm_started_pid = None
 
 def _handle_sql_exception_jpype():
     import jpype
@@ -207,9 +208,20 @@ def _dynamic_load_driver(jclassname, jars):
 
 def _jdbc_connect_jpype(jclassname, url, driver_args, jars, libs, experimental=None):
     import jpype
-    global _jvm_starting
+    global _jvm_starting, _jvm_started_pid
 
     _experimental = experimental or {}
+
+    if _jvm_started_pid is not None and _jvm_started_pid != os.getpid():
+        if not _experimental.get('dynamic_classpath'):
+            raise InterfaceError(
+                "Cannot use jaydebeapiarrow in a forked process. "
+                "The JVM was started in the parent process (PID %d) but this is "
+                "PID %d. JPype does not support fork after JVM start. "
+                "Move the connect() call after the fork, or use a "
+                "post-fork-spawn worker model (e.g. gunicorn --preload with "
+                "lazy connections)." % (_jvm_started_pid, os.getpid())
+            )
 
     # Brief lock: decide who starts the JVM (if needed).
     with _jvm_startup_lock:
@@ -274,6 +286,7 @@ def _jdbc_connect_jpype(jclassname, url, driver_args, jars, libs, experimental=N
                 jpype.startJVM(jvm_path, *args, ignoreUnrecognized=True,
                                convertStrings=True,
                                classpath=class_path)
+            _jvm_started_pid = os.getpid()
         finally:
             with _jvm_startup_lock:
                 _jvm_starting = False
