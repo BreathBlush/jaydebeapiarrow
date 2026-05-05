@@ -45,6 +45,8 @@ Homepage = "https://github.com/HenryNebula/jaydebeapiarrow"
 dev = [
     "coverage>=4.5",
     "jaydebeapi>=1.2.3",
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.0",
     "psycopg2-binary>=2.9.12",
     "pytest>=8.4.2",
     "pytest-xdist>=3.8.0",
@@ -71,6 +73,3 @@ values = ["dev", "rc", "final"]
 [tool.setuptools]
 packages = ["jaydebeapiarrow", "jaydebeapiarrow.lib"]
 include-package-data = true
-
-[tool.pytest.ini_options]
-addopts = "-n auto --dist loadfile"
