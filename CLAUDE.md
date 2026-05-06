@@ -1,8 +1,9 @@
 ## Ways of Working
 Use `uv run` to run Python scripts and tests — it automatically manages the virtual environment.
 - `uv sync` to install/sync dependencies
-- `CLASSPATH="test/jars/*" uv run python -m unittest test.test_integration.HsqldbTest` to run integration tests
+- `CLASSPATH="test/jars/*" uv run python -m unittest test.test_hsqldb.HsqldbTest` to run integration tests
 - `CLASSPATH="test/jars/*:test/mock-jars/*" uv run python -m unittest test.test_mock` to run mock tests
+- `CLASSPATH="test/jars/*:test/mock-jars/*" uv run python -m unittest test.test_infrastructure` to run infrastructure tests
 - `uv run bash test/build.sh` to build JARs
 
 
