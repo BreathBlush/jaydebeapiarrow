@@ -319,3 +319,15 @@ class DrillTest(IntegrationTestBase, unittest.TestCase):
     def test_blob_null_value(self):
         """Drill does not support parameterized INSERT."""
         self.skipTest("Drill does not support parameterized INSERT queries")
+
+    def test_varchar_non_ascii_roundtrip(self):
+        """Drill does not support parameterized INSERT."""
+        self.skipTest("Drill does not support parameterized INSERT queries")
+
+    def test_timestamp_utc_roundtrip_no_timezone_shift(self):
+        """Drill does not support parameterized INSERT."""
+        self.skipTest("Drill does not support parameterized INSERT queries")
+
+    def test_varchar_columns_return_data(self):
+        """Drill does not support INSERT INTO ... VALUES."""
+        self.skipTest("Drill does not support INSERT INTO ... VALUES")
