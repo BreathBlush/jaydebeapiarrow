@@ -6,9 +6,9 @@ import unittest
 
 from decimal import Decimal
 try:
-    from test._base import IntegrationTestBase, _THIS_DIR
+    from test._base import IntegrationTestBase, _THIS_DIR, _SUPPRESS_LOGGING_ARGS
 except ImportError:
-    from _base import IntegrationTestBase, _THIS_DIR
+    from _base import IntegrationTestBase, _THIS_DIR, _SUPPRESS_LOGGING_ARGS
 
 
 class DB2Test(IntegrationTestBase, unittest.TestCase):
@@ -29,7 +29,9 @@ class DB2Test(IntegrationTestBase, unittest.TestCase):
         )
 
         try:
-            db, conn = jaydebeapiarrow, jaydebeapiarrow.connect(driver, url, driver_args)
+            db, conn = jaydebeapiarrow, jaydebeapiarrow.connect(
+                driver, url, driver_args,
+                experimental={'jvm_args': _SUPPRESS_LOGGING_ARGS})
         except jpype.JException:
             self.fail("Can not connect with DB2. Please check if the instance is up and running.")
         else:

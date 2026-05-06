@@ -7,9 +7,9 @@ import unittest
 from decimal import Decimal
 from datetime import datetime
 try:
-    from test._base import IntegrationTestBase, SqliteTestBase, _THIS_DIR
+    from test._base import IntegrationTestBase, SqliteTestBase, _THIS_DIR, _SUPPRESS_LOGGING_ARGS
 except ImportError:
-    from _base import IntegrationTestBase, SqliteTestBase, _THIS_DIR
+    from _base import IntegrationTestBase, SqliteTestBase, _THIS_DIR, _SUPPRESS_LOGGING_ARGS
 
 
 class SqlitePyTest(SqliteTestBase, unittest.TestCase):
@@ -58,7 +58,9 @@ class SqliteXerialTest(SqliteTestBase, unittest.TestCase):
         properties = {
             "date_string_format": "yyyy-MM-dd HH:mm:ss"
         }
-        return jaydebeapiarrow, jaydebeapiarrow.connect(driver, url, driver_args=properties)
+        return jaydebeapiarrow, jaydebeapiarrow.connect(
+            driver, url, driver_args=properties,
+            experimental={'jvm_args': _SUPPRESS_LOGGING_ARGS})
 
     def test_execute_and_fetch(self):
         """SQLite date_string_format truncates microseconds."""

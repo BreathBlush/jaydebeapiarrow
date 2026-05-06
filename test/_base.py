@@ -26,6 +26,12 @@ from datetime import datetime
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 
+_SUPPRESS_LOGGING_ARGS = [
+    '-Dorg.slf4j.simpleLogger.defaultLogLevel=off',
+    '-Djava.util.logging.config.file=%s' % os.path.join(
+        os.path.dirname(jaydebeapiarrow.__file__), 'logging.properties'),
+]
+
 
 class IntegrationTestBase(object):
 
@@ -70,6 +76,14 @@ class IntegrationTestBase(object):
         (self.dbapi, self.conn) = self.connect()
         self._suppress_java_noise()
         self.setUpSql()
+
+    @staticmethod
+    def _quiet_connect(*args, **kwargs):
+        """Wrapper around jaydebeapiarrow.connect() that silences Java
+        loggers (slf4j-simple and java.util.logging) on the first call."""
+        kwargs.setdefault('experimental', {})
+        kwargs['experimental'].setdefault('jvm_args', _SUPPRESS_LOGGING_ARGS)
+        return jaydebeapiarrow.connect(*args, **kwargs)
 
     @staticmethod
     def _suppress_java_noise():

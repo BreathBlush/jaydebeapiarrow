@@ -5,9 +5,9 @@ import os
 import unittest
 
 try:
-    from test._base import IntegrationTestBase, _THIS_DIR
+    from test._base import IntegrationTestBase, _THIS_DIR, _SUPPRESS_LOGGING_ARGS
 except ImportError:
-    from _base import IntegrationTestBase, _THIS_DIR
+    from _base import IntegrationTestBase, _THIS_DIR, _SUPPRESS_LOGGING_ARGS
 
 
 class HsqldbTest(IntegrationTestBase, unittest.TestCase):
@@ -18,7 +18,9 @@ class HsqldbTest(IntegrationTestBase, unittest.TestCase):
         driver, url, driver_args = ( 'org.hsqldb.jdbcDriver',
                                      'jdbc:hsqldb:mem:.',
                                      ['SA', ''] )
-        return jaydebeapiarrow, jaydebeapiarrow.connect(driver, url, driver_args)
+        return jaydebeapiarrow, jaydebeapiarrow.connect(
+            driver, url, driver_args,
+            experimental={'jvm_args': _SUPPRESS_LOGGING_ARGS})
 
     def setUpSql(self):
         self.sql_file(os.path.join(_THIS_DIR, 'data', 'create_hsqldb.sql'))

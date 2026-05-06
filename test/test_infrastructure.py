@@ -15,9 +15,16 @@ import tempfile
 import unittest
 
 try:
-    from test._base import _THIS_DIR
+    from test._base import _THIS_DIR, _SUPPRESS_LOGGING_ARGS
 except ImportError:
-    from _base import _THIS_DIR
+    from _base import _THIS_DIR, _SUPPRESS_LOGGING_ARGS
+
+
+def _connect(*args, **kwargs):
+    """Wrapper that injects logging suppression JVM args on first connect."""
+    kwargs.setdefault('experimental', {})
+    kwargs['experimental'].setdefault('jvm_args', _SUPPRESS_LOGGING_ARGS)
+    return jaydebeapiarrow.connect(*args, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +45,7 @@ class _ForkSafetyTestBase(object):
         try:
             jaydebeapiarrow._jvm_started_pid = os.getpid() + 99999
             with self.assertRaises(jaydebeapiarrow.InterfaceError) as ctx:
-                jaydebeapiarrow.connect(self.DRIVER_CLASS,
+                _connect(self.DRIVER_CLASS,
                                         self.JDBC_URL, self.DRIVER_ARGS)
             self.assertIn("forked process", str(ctx.exception))
         finally:
@@ -46,7 +53,7 @@ class _ForkSafetyTestBase(object):
 
     def test_pid_recorded_after_connect(self):
         """After connect(), _jvm_started_pid must equal the current PID."""
-        c = jaydebeapiarrow.connect(self.DRIVER_CLASS,
+        c = _connect(self.DRIVER_CLASS,
                                     self.JDBC_URL, self.DRIVER_ARGS)
         try:
             self.assertEqual(jaydebeapiarrow._jvm_started_pid, os.getpid())
@@ -487,7 +494,7 @@ class _ReflectionTestBase(object):
     DRIVER_ARGS = None
 
     def setUp(self):
-        self.conn = jaydebeapiarrow.connect(
+        self.conn = _connect(
             self.DRIVER_CLASS,
             self.JDBC_URL,
             self.DRIVER_ARGS,
@@ -601,12 +608,12 @@ class PropertiesDriverArgsPassingTest(unittest.TestCase):
         driver, url, driver_args = ( 'org.hsqldb.jdbcDriver',
                                      'jdbc:hsqldb:mem:.',
                                      ['SA', ''] )
-        c = jaydebeapiarrow.connect(driver, url, driver_args)
+        c = _connect(driver, url, driver_args)
         c.close()
 
     def test_connect_with_properties(self):
         driver, url, driver_args = ( 'org.hsqldb.jdbcDriver',
                                      'jdbc:hsqldb:mem:.',
                                      {'user': 'SA', 'password': '' } )
-        c = jaydebeapiarrow.connect(driver, url, driver_args)
+        c = _connect(driver, url, driver_args)
         c.close()
