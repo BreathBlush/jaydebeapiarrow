@@ -1,10 +1,11 @@
 ## Ways of Working
 Use `uv run` to run Python scripts and tests — it automatically manages the virtual environment.
 - `uv sync` to install/sync dependencies
-- `CLASSPATH="test/jars/*" uv run python -m unittest test.test_hsqldb.HsqldbTest` to run integration tests
-- `CLASSPATH="test/jars/*:test/mock-jars/*" uv run python -m unittest test.test_mock` to run mock tests
-- `CLASSPATH="test/jars/*:test/mock-jars/*" uv run python -m unittest test.test_infrastructure` to run infrastructure tests
 - `uv run bash test/build.sh` to build JARs
+- `uv run pytest test/ -v` to run all tests via pytest
+- `uv run pytest test/test_postgres.py -v` to run a specific driver's tests
+- `uv run pytest test/ -k "test_execute_and_fetch" -v` to run specific tests by name
+- `CLASSPATH` is set automatically by tox; for local runs set it to `test/jars/*:test/mock-jars/*`
 
 
 ## Speical Requirements in YOLO Mode
