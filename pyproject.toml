@@ -45,6 +45,8 @@ Homepage = "https://github.com/HenryNebula/jaydebeapiarrow"
 dev = [
     "coverage>=4.5",
     "jaydebeapi>=1.2.3",
+    "pytest>=8.4.2",
+    "pytest-xdist>=3.8.0",
     "unittest-xml-reporting",
 ]
 
@@ -68,3 +70,6 @@ values = ["dev", "rc", "final"]
 [tool.setuptools]
 packages = ["jaydebeapiarrow", "jaydebeapiarrow.lib"]
 include-package-data = true
+
+[tool.pytest.ini_options]
+addopts = "-n auto --dist loadfile"
