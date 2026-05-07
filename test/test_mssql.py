@@ -45,7 +45,10 @@ class MSSQLTest(IntegrationTestBase, unittest.TestCase):
 
     def _cleanup_tables(self):
         with self.conn.cursor() as cursor:
-            cursor.execute("USE test_db")
+            try:
+                cursor.execute("USE test_db")
+            except Exception:
+                pass
         super()._cleanup_tables()
 
     def tearDown(self):
