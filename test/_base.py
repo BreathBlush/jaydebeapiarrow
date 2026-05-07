@@ -75,7 +75,18 @@ class IntegrationTestBase(object):
     def setUp(self):
         (self.dbapi, self.conn) = self.connect()
         self._suppress_java_noise()
+        self._cleanup_tables()
         self.setUpSql()
+
+    def _cleanup_tables(self):
+        """Drop any leftover tables from a previous failed test run."""
+        with self.conn.cursor() as cursor:
+            for table in ('ACCOUNT', 'NUMERIC_TEST', 'NUMERIC_COMBO',
+                          'DOUBLE_TEST', 'BIGINT_TEST'):
+                try:
+                    cursor.execute(f"DROP TABLE {table}")
+                except Exception:
+                    pass
 
     @staticmethod
     def _quiet_connect(*args, **kwargs):
@@ -117,6 +128,10 @@ class IntegrationTestBase(object):
         with self.conn.cursor() as cursor:
             cursor.execute("drop table ACCOUNT")
             self._numeric_teardown()
+        try:
+            self.conn.jconn.setAutoCommit(True)
+        except Exception:
+            pass
         self.conn.close()
 
     def test_execute_and_fetch_no_data(self):
@@ -599,7 +614,7 @@ class IntegrationTestBase(object):
     def test_description_returns_column_alias(self):
         """cursor.description should return the AS alias, not the table column name."""
         with self.conn.cursor() as cursor:
-            cursor.execute("SELECT ACCOUNT_NO AS acct_num FROM ACCOUNT")
+            cursor.execute('SELECT ACCOUNT_NO AS "ACCT_NUM" FROM ACCOUNT')
             self.assertEqual(cursor.description[0][0], "ACCT_NUM")
 
     def test_execute_param_none(self):
@@ -659,14 +674,14 @@ class IntegrationTestBase(object):
         """After fetchall exhausts the result set, the Arrow iterator should
         be closed and nulled out (memory leak regression, legacy #227)."""
         with self.conn.cursor() as cursor:
-            cursor.execute("SELECT * FROM Account")
+            cursor.execute("SELECT * FROM ACCOUNT")
             cursor.fetchall()
             self.assertIsNone(cursor._iter)
 
     def test_iterator_closed_after_fetchone_exhaustion(self):
         """After fetchone exhausts the result set, iterator should be closed."""
         with self.conn.cursor() as cursor:
-            cursor.execute("SELECT COUNT(*) FROM Account")
+            cursor.execute("SELECT COUNT(*) FROM ACCOUNT")
             cursor.fetchone()
             result = cursor.fetchone()
             self.assertIsNone(result)
@@ -675,7 +690,7 @@ class IntegrationTestBase(object):
     def test_iterator_closed_after_fetchmany_exhaustion(self):
         """After fetchmany exhausts the result set, iterator should be closed."""
         with self.conn.cursor() as cursor:
-            cursor.execute("SELECT * FROM Account")
+            cursor.execute("SELECT * FROM ACCOUNT")
             cursor.fetchmany(size=1000)
             self.assertIsNone(cursor._iter)
 
@@ -684,7 +699,7 @@ class IntegrationTestBase(object):
         or buffers (memory leak regression, legacy #227)."""
         with self.conn.cursor() as cursor:
             for _ in range(5):
-                cursor.execute("SELECT * FROM Account")
+                cursor.execute("SELECT * FROM ACCOUNT")
                 result = cursor.fetchall()
                 self.assertTrue(len(result) > 0)
                 self.assertIsNone(cursor._iter)
