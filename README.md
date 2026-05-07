@@ -120,44 +120,52 @@ In theory *every database with a suitable JDBC driver should work*. It is confir
 
 ## Testing
 
-Integration tests are located in `test/`. The test suite covers SQLite (in-memory), PostgreSQL, MySQL, and HSQLDB.
+Integration tests are located in `test/`. Tests run via [pytest](https://docs.pytest.org/) and cover all supported databases: SQLite (in-memory), HSQLDB, PostgreSQL, MySQL, MSSQL, Oracle, DB2, Trino, and Apache Drill.
 
 ### Build JARs and download drivers
 
 ```bash
 uv run bash test/build.sh                 # Build arrow-jdbc-extension and MockDriver JARs
-uv run bash test/download_jdbc_drivers.sh # Download PostgreSQL, MySQL, SQLite, HSQLDB JDBC drivers
+uv run bash test/download_jdbc_drivers.sh # Download JDBC drivers
 ```
 
 ### Run tests
 
 ```bash
-CLASSPATH="test/jars/*" uv run python -m unittest test.test_integration.HsqldbTest   # HSQLDB
-CLASSPATH="test/jars/*" uv run python -m unittest test.test_integration.SqliteXerialTest  # SQLite
-CLASSPATH="test/jars/*" uv run python -m unittest test.test_mock                       # Mock driver
+CLASSPATH="test/jars/*:test/mock-jars/*" uv run pytest test/test_mock.py test/test_infrastructure.py -v   # Mock + infrastructure
+CLASSPATH="test/jars/*" uv run pytest test/test_hsqldb.py -v                                                # HSQLDB
+CLASSPATH="test/jars/*" uv run pytest test/test_sqlite.py::SqliteXerialTest -v                              # SQLite JDBC
+CLASSPATH="test/jars/*" uv run pytest test/ -v --tb=short                                                  # All tests
 ```
+
+Pytest is configured in `pyproject.toml` to run tests in parallel across files using `pytest-xdist` with `--dist loadfile`.
 
 ### External database tests
 
-PostgreSQL and MySQL tests require running database instances. Docker Compose configs and helper scripts are provided in `test/`:
+Container-based databases are managed via Docker Compose:
 
 ```bash
-# Start both databases
-bash test/start.sh
+# Start all databases
+cd test && docker compose up -d
 
 # Check status
-bash test/status.sh
+cd test && docker compose ps
 
-# Stop databases
-bash test/stop.sh
+# Stop all databases
+cd test && docker compose down
 ```
 
 Database connection defaults (overridable via environment variables):
 
 | Database | Host | Port | DB | User | Password | Env prefix |
 |---|---|---|---|---|---|---|
-| PostgreSQL | localhost | 5432 | test_db | user | password | `JY_PG_*` |
-| MySQL | localhost | 3306 | test_db | user | password | `JY_MYSQL_*` |
+| PostgreSQL | localhost | 15432 | test_db | user | password | `JY_PG_*` |
+| MySQL | localhost | 13306 | test_db | user | password | `JY_MYSQL_*` |
+| MSSQL | localhost | 11433 | — | sa | Password123! | `JY_MSSQL_*` |
+| Oracle | localhost | 11521 | XEPDB1 | system | Password123! | `JY_ORACLE_*` |
+| DB2 | localhost | 15000 | test_db | db2inst1 | Password123! | `JY_DB2_*` |
+| Trino | localhost | 18080 | — | test | — | `JY_TRINO_*` |
+| Drill | localhost | 31010 | — | — | — | `JY_DRILL_*` |
 
 ## Benchmarks
 

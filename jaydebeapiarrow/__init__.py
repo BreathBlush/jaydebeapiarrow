@@ -240,6 +240,10 @@ def _jdbc_connect_jpype(jclassname, url, driver_args, jars, libs, experimental=N
 
         # Add-opens for Apache Arrow on Java 9+
         args.append('--add-opens=java.base/java.nio=ALL-UNNAMED')
+        # Drill's javassist needs reflective access to ClassLoader.defineClass
+        args.append('--add-opens=java.base/java.lang=ALL-UNNAMED')
+        # User-supplied extra JVM arguments (e.g. logging suppression)
+        args.extend(_experimental.get('jvm_args', []))
 
         # jvm_path = ('/usr/lib/jvm/java-6-openjdk'
         #             '/jre/lib/i386/client/libjvm.so')
@@ -490,6 +494,9 @@ def connect(jclassname, url, driver_args=None, jars=None, libs=None, experimenta
               from JARs after the JVM has already been started, using a
               DriverShim proxy.  This also bypasses the fork-after-JVM-start
               guard, making it suitable for gunicorn --preload workers.
+            jvm_args (list[str]): Extra JVM arguments passed to startJVM().
+              Only takes effect on the first connect() call (when the JVM
+              is started). Ignored on subsequent calls.
     """
     if isinstance(driver_args, str):
         driver_args = [ driver_args ]

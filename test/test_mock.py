@@ -18,13 +18,14 @@
 # <http://www.gnu.org/licenses/>.
 
 import jaydebeapiarrow
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 import os
-import shutil
-import subprocess
-import sys
-import tempfile
+
+try:
+    from test._base import _SUPPRESS_LOGGING_ARGS
+except ImportError:
+    from _base import _SUPPRESS_LOGGING_ARGS
 
 try:
     import unittest2 as unittest
@@ -35,7 +36,8 @@ class MockTest(unittest.TestCase):
 
     def setUp(self):
         self.conn = jaydebeapiarrow.connect('org.jaydebeapi.mockdriver.MockDriver',
-                                       'jdbc:jaydebeapi://dummyurl')
+                                       'jdbc:jaydebeapi://dummyurl',
+                                       experimental={'jvm_args': _SUPPRESS_LOGGING_ARGS})
 
     def tearDown(self):
         self.conn.close()
@@ -66,11 +68,6 @@ class MockTest(unittest.TestCase):
                     with self.conn.cursor() as cursor:
                         cursor.execute("dummy stmt")
                         cursor.fetchone()
-                    # verify = self.conn.jconn.verifyResultSet()
-                    # verify_get = getattr(verify,
-                    #                      extra_type_mappings.get(db_api_type.group_name,
-                    #                                              'getObject'))
-                    # verify_get(1)
 
     def test_ancient_date_mapped(self):
         date = datetime(year=70, month=1, day=1).date()
@@ -154,8 +151,6 @@ class MockTest(unittest.TestCase):
         when the data exceeds the vector's configured scale."""
         import jpype
         BigDecimal = jpype.JClass("java.math.BigDecimal")
-        # Value has scale 20, but vector is configured with scale 2.
-        # HALF_UP rounds to 2 decimal places.
         value = BigDecimal("123456789012345678.12345678901234567890")
         self.conn.jconn.mockHighPrecisionDecimalResult(value, 38, 2)
         with self.conn.cursor() as cursor:
@@ -517,8 +512,6 @@ class MockTest(unittest.TestCase):
                 cursor.execute("dummy stmt")
                 self.fail("expected exception")
             except jaydebeapiarrow.InterfaceError as e:
-                # JPype 1.4.1: "java.lang.RuntimeException: expected"
-                # JPype 1.7.0+: "java.lang.java.lang.RuntimeException: java.lang.RuntimeException: expected"
                 self.assertIn("RuntimeException: expected", str(e))
 
     def test_sql_exception_on_commit(self):
@@ -535,8 +528,6 @@ class MockTest(unittest.TestCase):
             self.conn.commit()
             self.fail("expected exception")
         except jaydebeapiarrow.InterfaceError as e:
-            # JPype 1.4.1: "java.lang.RuntimeException: expected"
-            # JPype 1.7.0+: "java.lang.java.lang.RuntimeException: java.lang.RuntimeException: expected"
             self.assertIn("RuntimeException: expected", str(e))
 
     def test_sql_exception_on_rollback(self):
@@ -553,8 +544,6 @@ class MockTest(unittest.TestCase):
             self.conn.rollback()
             self.fail("expected exception")
         except jaydebeapiarrow.InterfaceError as e:
-            # JPype 1.4.1: "java.lang.RuntimeException: expected"
-            # JPype 1.7.0+: "java.lang.java.lang.RuntimeException: java.lang.RuntimeException: expected"
             self.assertIn("RuntimeException: expected", str(e))
 
     def test_cursor_with_statement(self):
@@ -566,7 +555,8 @@ class MockTest(unittest.TestCase):
 
     def test_connection_with_statement(self):
         with jaydebeapiarrow.connect('org.jaydebeapi.mockdriver.MockDriver',
-                                       'jdbc:jaydebeapi://dummyurl') as conn:
+                                       'jdbc:jaydebeapi://dummyurl',
+                                       experimental={'jvm_args': _SUPPRESS_LOGGING_ARGS}) as conn:
             self.assertEqual(conn._closed, False)
         self.assertEqual(conn._closed, True)
 
@@ -797,10 +787,7 @@ class MockTest(unittest.TestCase):
     # --- Timestamp sub-second leading zero tests (legacy #44) ---
 
     def test_timestamp_leading_zero_subsecond_096ms(self):
-        """Regression: .096 ms must not become .96 ms (legacy #44).
-        The legacy bug mangled 0.096965169 to 0.960000 by stripping the
-        leading zero during string-based parsing. Our Arrow path uses
-        integer nanosecond arithmetic via LocalDateTime.getNano()."""
+        """Regression: .096 ms must not become .96 ms (legacy #44)."""
         import jpype
         LocalDateTime = jpype.JClass("java.time.LocalDateTime")
         ldt = LocalDateTime.of(2017, 6, 19, 15, 30, 0, 96_965_169)
@@ -860,7 +847,6 @@ class MockTest(unittest.TestCase):
 
     def test_timestamp_microsecond_precision_90000(self):
         """90000 microseconds (0.090000s) should round-trip correctly.
-        Legacy bug caused this to become 900000 (extra zero).
         Regression test for baztian/jaydebeapi#229."""
         import jpype
         LocalDateTime = jpype.JClass("java.time.LocalDateTime")
@@ -912,13 +898,7 @@ class MockTest(unittest.TestCase):
     # --- Timestamp timezone preservation tests (legacy issue #73) ---
 
     def test_timestamp_returns_naive_datetime(self):
-        """TIMESTAMP columns must return naive Python datetime objects.
-
-        Regression test for baztian/jaydebeapi#73 where legacy jaydebeapi
-        returned timestamps shifted to the JVM's local timezone. Our Arrow
-        path normalizes to UTC on the Java side, so the returned datetime
-        should always be naive and match the stored value exactly.
-        """
+        """TIMESTAMP columns must return naive Python datetime objects."""
         self.conn.jconn.mockType("TIMESTAMP")
         with self.conn.cursor() as cursor:
             cursor.execute("dummy stmt")
@@ -929,13 +909,7 @@ class MockTest(unittest.TestCase):
         self.assertEqual(result[0], datetime(2009, 12, 1, 8, 20, 45))
 
     def test_timestamp_utc_boundary_value(self):
-        """TIMESTAMP at UTC midnight must not shift to previous day.
-
-        Regression test for baztian/jaydebeapi#73. If the JVM's default
-        timezone is behind UTC (e.g., EST = UTC-5), a naive implementation
-        would shift midnight UTC to the previous day. Our Arrow path uses
-        UTC normalization, so the value must be preserved exactly.
-        """
+        """TIMESTAMP at UTC midnight must not shift to previous day."""
         import jpype
         localDT = jpype.java.time.LocalDateTime.of(2024, 1, 15, 0, 0, 0)
         self.conn.jconn.mockTimestampResult(localDT)
@@ -945,17 +919,11 @@ class MockTest(unittest.TestCase):
         self.assertEqual(result[0], datetime(2024, 1, 15, 0, 0, 0))
 
     def test_timestamp_end_of_day_value(self):
-        """TIMESTAMP near end of day must not overflow to next day.
-
-        Regression test for baztian/jaydebeapi#73. Verifies that a
-        timestamp near midnight (23:59:59) is preserved exactly without
-        timezone shifting causing a day rollover.
-        """
+        """TIMESTAMP near end of day must not overflow to next day."""
         self.conn.jconn.mockType("TIMESTAMP")
         with self.conn.cursor() as cursor:
             cursor.execute("dummy stmt")
             result = cursor.fetchone()
-        # The mock returns 2009-12-01T08:20:45 — verify exact value
         self.assertEqual(result[0].year, 2009)
         self.assertEqual(result[0].month, 12)
         self.assertEqual(result[0].day, 1)
@@ -967,25 +935,22 @@ class MockTest(unittest.TestCase):
 
     def test_no_deprecated_thread_attachment_api(self):
         """Verify that connect() does not use the deprecated
-        jpype.isThreadAttachedToJVM(). Regression test for legacy
-        baztian/jaydebeapi#203 where this triggered a DeprecationWarning."""
+        jpype.isThreadAttachedToJVM()."""
         import inspect
-        import jaydebeapiarrow
         source = inspect.getsource(jaydebeapiarrow)
         self.assertNotIn('isThreadAttachedToJVM', source,
-                         'Deprecated jpype.isThreadAttachedToJVM() must not be used; '
-                         'use jpype.java.lang.Thread.isAttached() instead')
+                         'Deprecated jpype.isThreadAttachedToJVM() must not be used')
 
     def test_connect_no_deprecation_warnings(self):
         """Verify that connecting via the mock driver emits no
-        DeprecationWarnings from JPype. Regression test for legacy
-        baztian/jaydebeapi#203."""
+        DeprecationWarnings from JPype."""
         import warnings
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always')
             self.conn = jaydebeapiarrow.connect(
                 'org.jaydebeapi.mockdriver.MockDriver',
-                'jdbc:jaydebeapi://dummyurl')
+                'jdbc:jaydebeapi://dummyurl',
+                experimental={'jvm_args': _SUPPRESS_LOGGING_ARGS})
         jpype_warnings = [w for w in caught
                           if issubclass(w.category, DeprecationWarning)
                           and 'jpype' in str(w.message).lower()]
@@ -997,9 +962,7 @@ class MockTest(unittest.TestCase):
     # --- Non-ASCII character round-trip tests (legacy issue #176) ---
 
     def test_varchar_german_umlauts(self):
-        """VARCHAR columns with German umlauts must round-trip correctly.
-        Regression test for baztian/jaydebeapi#176 where reading VARCHAR
-        columns containing umlauts caused CharConversionException."""
+        """VARCHAR columns with German umlauts must round-trip correctly."""
         self.conn.jconn.mockStringResult("Grüße aus München")
         with self.conn.cursor() as cursor:
             cursor.execute("dummy stmt")
@@ -1034,13 +997,11 @@ class MockTest(unittest.TestCase):
 
     def test_long_query_string_18k_characters(self):
         """SQL strings of 18k+ characters must pass through execute()
-        and return correct values. Regression test for
-        baztian/jaydebeapi#91 where long queries caused failures."""
+        and return correct values."""
         self.conn.jconn.mockBigDecimalResult(1, 0)
         long_query = ("SELECT * FROM t WHERE id IN ("
                       + ",".join(str(i) for i in range(5000)) + ")")
-        self.assertGreater(len(long_query), 18000,
-                           "Test query must exceed 18k characters")
+        self.assertGreater(len(long_query), 18000)
         with self.conn.cursor() as cursor:
             cursor.execute(long_query)
             result = cursor.fetchone()
@@ -1060,9 +1021,7 @@ class MockTest(unittest.TestCase):
         self.assertIsNone(cursor._connection)
 
     def test_repeated_query_cycles_no_accumulation(self):
-        """Repeated execute/close cycles should not accumulate stale iterators
-        or buffers (legacy #227). The mock driver's ResultSet never exhausts,
-        so we test partial fetch + close cycles instead."""
+        """Repeated execute/close cycles should not accumulate stale iterators."""
         self.conn.jconn.mockType("INTEGER")
         for _ in range(10):
             cursor = self.conn.cursor()
@@ -1070,7 +1029,6 @@ class MockTest(unittest.TestCase):
             result = cursor.fetchone()
             self.assertIsNotNone(result)
             cursor.close()
-            # After close, iterator and buffer should be cleaned up
             self.assertIsNone(cursor._iter)
             self.assertEqual(cursor._buffer, [])
 
@@ -1088,98 +1046,26 @@ class MockTest(unittest.TestCase):
 
     def test_is_jvm_started_with_api_present(self):
         """_is_jvm_started() returns True when JVM is running via the standard API."""
-        import jpype
         result = jaydebeapiarrow._is_jvm_started()
         self.assertTrue(result, "JVM should be started during mock tests")
 
     def test_is_jvm_started_fallback_without_public_api(self):
-        """_is_jvm_started() falls back to internal state when isJVMStarted is missing.
-
-        Simulates JPype versions (e.g. 1.6.0) that removed the public
-        ``jpype.isJVMStarted()`` API.  The helper must still return the
-        correct value by inspecting ``jpype._core._JVM_started``.
-        """
+        """_is_jvm_started() falls back to internal state when isJVMStarted is missing."""
         import jpype
-        # Save and remove the public API
         original = getattr(jpype, 'isJVMStarted', None)
         try:
             delattr(jpype, 'isJVMStarted')
-            # JVM is running in this test, so fallback must return True
             result = jaydebeapiarrow._is_jvm_started()
             self.assertTrue(result,
                              "Fallback must return True when JVM is running")
         finally:
-            # Restore the original API
             if original is not None:
                 jpype.isJVMStarted = original
 
-    # --- JPype field reflection API tests (legacy #111) ---
-
-    def test_java_sql_types_reflection_uses_standard_api(self):
-        """Verify java.sql.Types constants are accessed via standard Java
-        Reflection API (field.get/getModifiers/getName), not the deprecated
-        JPype-specific getStaticAttribute() which was removed in newer JPype."""
-        import jpype
-        Types = jpype.java.sql.Types
-        fields = Types.class_.getFields()
-        # Verify we can iterate fields using standard Reflection
-        static_public_fields = {}
-        for field in fields:
-            modifiers = field.getModifiers()
-            if jpype.java.lang.reflect.Modifier.isStatic(modifiers) and \
-               jpype.java.lang.reflect.Modifier.isPublic(modifiers):
-                value = int(field.get(None))
-                static_public_fields[field.getName()] = value
-        # Spot-check well-known constants
-        self.assertEqual(static_public_fields['INTEGER'], 4)
-        self.assertEqual(static_public_fields['VARCHAR'], 12)
-        self.assertEqual(static_public_fields['TIMESTAMP'], 93)
-        self.assertEqual(static_public_fields['DECIMAL'], 3)
-        self.assertEqual(static_public_fields['NUMERIC'], 2)
-
-    def test_jdbc_type_mapping_populates_correctly(self):
-        """Verify _map_jdbc_type_to_dbapi builds the mapping using
-        standard Reflection (not getStaticAttribute)."""
-        import jpype
-        Types = jpype.java.sql.Types
-        # Trigger mapping population
-        result = jaydebeapiarrow.DBAPITypeObject._map_jdbc_type_to_dbapi(Types.INTEGER)
-        self.assertIs(result, jaydebeapiarrow.NUMBER)
-        # Verify mapping is populated (not empty dict)
-        self.assertIsNotNone(jaydebeapiarrow._jdbc_const_to_name)
-        self.assertGreater(len(jaydebeapiarrow._jdbc_const_to_name), 20)
-
-    def test_dbapi_type_eq_with_jdbc_constants(self):
-        """Verify DBAPITypeObject.__eq__ works with JDBC type constants
-        accessed through standard Java Reflection."""
-        import jpype
-        Types = jpype.java.sql.Types
-        # Trigger mapping population via a call to _map_jdbc_type_to_dbapi
-        jaydebeapiarrow.DBAPITypeObject._map_jdbc_type_to_dbapi(Types.INTEGER)
-        # Now __eq__ should work since _jdbc_const_to_name is populated
-        # Cast Java int to Python int for comparison
-        # (Java int's __eq__ doesn't delegate to our DBAPITypeObject.__eq__)
-        self.assertTrue(jaydebeapiarrow.NUMBER == int(Types.INTEGER))
-        self.assertTrue(jaydebeapiarrow.NUMBER == int(Types.BIGINT))
-        self.assertTrue(jaydebeapiarrow.NUMBER == int(Types.SMALLINT))
-        self.assertTrue(jaydebeapiarrow.NUMBER == int(Types.TINYINT))
-        # These should match STRING type
-        self.assertTrue(jaydebeapiarrow.STRING == int(Types.VARCHAR))
-        self.assertTrue(jaydebeapiarrow.STRING == int(Types.CHAR))
-        # These should match DATETIME type
-        self.assertTrue(jaydebeapiarrow.DATETIME == int(Types.TIMESTAMP))
-        # DATE has its own type object
-        self.assertTrue(jaydebeapiarrow.DATE == int(Types.DATE))
+    # --- VARCHAR data tests ---
 
     def test_varchar_returns_data_not_empty(self):
-        """Verify VARCHAR columns return actual data, not empty strings.
-
-        Regression test for legacy issue #119 where Oracle 9i VARCHAR2 columns
-        returned empty strings. In the original jaydebeapi, getObject() could
-        return oracle.sql.CHAR objects that JPype failed to convert. In
-        jaydebeapiarrow, the Arrow JDBC adapter uses getString() which always
-        returns a proper java.lang.String.
-        """
+        """Verify VARCHAR columns return actual data, not empty strings."""
         self.conn.jconn.mockType("VARCHAR")
         with self.conn.cursor() as cursor:
             cursor.execute("dummy stmt")
@@ -1189,15 +1075,10 @@ class MockTest(unittest.TestCase):
         self.assertNotEqual(result[0], "")
 
     def test_varchar_with_multicolumn_result(self):
-        """Verify VARCHAR data is returned correctly alongside numeric columns.
-
-        Regression test for legacy issue #119: the reporter's query had mixed
-        VARCHAR and numeric columns, and only numeric data was returned.
-        """
+        """Verify VARCHAR data is returned correctly alongside numeric columns."""
         import jpype
         Types = jpype.java.sql.Types
 
-        # Set up a 2-column result: INTEGER + VARCHAR
         self.conn.jconn.mockMultiColumnResult(
             [Types.INTEGER, Types.VARCHAR],
             [42, "Hello World"]
@@ -1211,8 +1092,7 @@ class MockTest(unittest.TestCase):
     # --- SQLXML type tests ---
 
     def test_sqlxml_column_returns_string(self):
-        """SQLXML columns should return Python strings, not Java objects.
-        Regression test for legacy issue baztian/jaydebeapi#223."""
+        """SQLXML columns should return Python strings, not Java objects."""
         self.conn.jconn.mockType("SQLXML")
         with self.conn.cursor() as cursor:
             cursor.execute("dummy stmt")
@@ -1225,7 +1105,6 @@ class MockTest(unittest.TestCase):
     def test_commit_skipped_when_autocommit_enabled(self):
         """commit() should be a no-op when autocommit is enabled."""
         self.conn.jconn.mockAutoCommit(True)
-        # Should not raise even if commit would throw an exception
         self.conn.jconn.mockExceptionOnCommit("java.sql.SQLException",
                                                "Cannot commit when autoCommit is enabled.")
         self.conn.commit()  # must not raise
@@ -1233,7 +1112,6 @@ class MockTest(unittest.TestCase):
     def test_commit_called_when_autocommit_disabled(self):
         """commit() should call jconn.commit() when autocommit is disabled."""
         self.conn.jconn.mockAutoCommit(False)
-        # No exception mock = default mock behavior, commit succeeds silently
         self.conn.commit()
 
     def test_rollback_skipped_when_autocommit_enabled(self):
@@ -1272,218 +1150,3 @@ class MockTest(unittest.TestCase):
     def test_lastrowid_none_after_executemany(self):
         """lastrowid should be None after executemany (mock driver limitation: skip)."""
         self.skipTest("Mock driver executeBatch returns None; covered by integration test")
-
-    # --- Fork-safety tests (legacy issue #232) ---
-
-    def test_fork_after_connect_raises_error(self):
-        """Connecting in a forked process after JVM start must raise
-        InterfaceError. Regression test for baztian/jaydebeapi#232 where
-        JPype's native library was 'already loaded in another classloader'."""
-        import os
-        original_pid = jaydebeapiarrow._jvm_started_pid
-        try:
-            jaydebeapiarrow._jvm_started_pid = os.getpid() + 99999
-            with self.assertRaises(jaydebeapiarrow.InterfaceError) as ctx:
-                jaydebeapiarrow.connect('org.jaydebeapi.mockdriver.MockDriver',
-                                        'jdbc:jaydebeapi://dummyurl')
-            self.assertIn("forked process", str(ctx.exception))
-        finally:
-            jaydebeapiarrow._jvm_started_pid = original_pid
-
-    def test_connect_records_pid_at_jvm_start(self):
-        """After a successful connect(), _jvm_started_pid must match
-        the current process PID."""
-        import os
-        self.assertEqual(jaydebeapiarrow._jvm_started_pid, os.getpid())
-
-
-class JarPathSpacesTest(unittest.TestCase):
-    """Tests for JAR file paths containing spaces (issue #86).
-
-    These tests must run in a subprocess because JPype only allows
-    one JVM start per process, and the main test suite already starts it.
-    """
-
-    def _find_mock_jar(self):
-        for root, dirs, files in os.walk(os.path.dirname(__file__)):
-            for f in files:
-                if f.startswith('mockdriver') and f.endswith('.jar'):
-                    return os.path.join(root, f)
-        self.fail('mockdriver JAR not found')
-
-    def _run_connect_in_subprocess(self, jar_path):
-        """Run a connect call in a fresh subprocess and return success/failure."""
-        code = f'''
-import jaydebeapiarrow
-try:
-    conn = jaydebeapiarrow.connect(
-        'org.jaydebeapi.mockdriver.MockDriver',
-        'jdbc:jaydebeapi://dummyurl',
-        jars={repr(jar_path)}
-    )
-    print('OK')
-    conn.close()
-except Exception as e:
-    print(f'FAIL: {{type(e).__name__}}: {{e}}')
-'''
-        result = subprocess.run(
-            [sys.executable, '-c', code],
-            capture_output=True, text=True, timeout=30,
-            cwd=os.path.dirname(os.path.dirname(__file__))
-        )
-        return result.stdout.strip(), result.stderr.strip()
-
-    def test_jar_path_with_spaces(self):
-        """JAR paths containing spaces should work (issue #86)."""
-        mock_jar = self._find_mock_jar()
-        with tempfile.TemporaryDirectory(prefix='path with spaces ') as tmpdir:
-            dest = os.path.join(tmpdir, os.path.basename(mock_jar))
-            shutil.copy2(mock_jar, dest)
-            stdout, stderr = self._run_connect_in_subprocess(dest)
-        self.assertEqual(stdout, 'OK', f'Connection failed: {stderr}')
-
-    def test_jar_path_with_special_chars(self):
-        """JAR paths containing parentheses and special chars should work."""
-        mock_jar = self._find_mock_jar()
-        with tempfile.TemporaryDirectory(prefix='path (x86) & test ') as tmpdir:
-            dest = os.path.join(tmpdir, os.path.basename(mock_jar))
-            shutil.copy2(mock_jar, dest)
-            stdout, stderr = self._run_connect_in_subprocess(dest)
-        self.assertEqual(stdout, 'OK', f'Connection failed: {stderr}')
-
-
-class DynamicClasspathTest(unittest.TestCase):
-    """Tests for experimental dynamic_classpath feature.
-
-    These tests run in subprocesses because the JVM can only be started once
-    per process, and dynamic loading needs a JVM that is already running.
-    """
-
-    def _find_mock_jar(self):
-        for root, dirs, files in os.walk(os.path.dirname(__file__)):
-            for f in files:
-                if f.startswith('mockdriver') and f.endswith('.jar'):
-                    return os.path.join(root, f)
-        self.fail('mockdriver JAR not found')
-
-    def _run_in_subprocess(self, code):
-        """Run code in a fresh subprocess and return stdout, stderr."""
-        result = subprocess.run(
-            [sys.executable, '-c', code],
-            capture_output=True, text=True, timeout=30,
-            cwd=os.path.dirname(os.path.dirname(__file__))
-        )
-        return result.stdout.strip(), result.stderr.strip()
-
-    def test_dynamic_load_after_jvm_start(self):
-        """Connect with a driver JAR after JVM is already running (dynamic_classpath)."""
-        mock_jar = self._find_mock_jar()
-        code = f'''
-import jaydebeapiarrow
-
-# First connection starts the JVM normally (no jars needed — mock driver
-# is found via CLASSPATH in test harness)
-conn1 = jaydebeapiarrow.connect(
-    'org.jaydebeapi.mockdriver.MockDriver',
-    'jdbc:jaydebeapi://dummyurl'
-)
-conn1.close()
-
-# Second connection uses dynamic classpath to load the driver from JAR
-conn2 = jaydebeapiarrow.connect(
-    'org.jaydebeapi.mockdriver.MockDriver',
-    'jdbc:jaydebeapi://dummyurl',
-    jars={repr(mock_jar)},
-    experimental={{'dynamic_classpath': True}}
-)
-conn2.close()
-print('OK')
-'''
-        stdout, stderr = self._run_in_subprocess(code)
-        self.assertEqual(stdout, 'OK', f'Dynamic load failed: {stderr}')
-
-    def test_dynamic_load_without_flag_raises_error(self):
-        """Without dynamic_classpath flag, connecting with new JARs after JVM
-        start should raise InterfaceError (fork guard)."""
-        mock_jar = self._find_mock_jar()
-        code = f'''
-import jaydebeapiarrow
-
-# Start JVM with first connection
-conn1 = jaydebeapiarrow.connect(
-    'org.jaydebeapi.mockdriver.MockDriver',
-    'jdbc:jaydebeapi://dummyurl'
-)
-conn1.close()
-
-# Try connecting with explicit jars after JVM start — no experimental flag
-try:
-    conn2 = jaydebeapiarrow.connect(
-        'org.jaydebeapi.mockdriver.MockDriver',
-        'jdbc:jaydebeapi://dummyurl',
-        jars={repr(mock_jar)}
-    )
-    conn2.close()
-    print('NO_ERROR')
-except jaydebeapiarrow.InterfaceError as e:
-    if 'forked process' in str(e):
-        print('FORK_ERROR')
-    else:
-        print(f'OTHER_INTERFACE_ERROR: {{e}}')
-except Exception as e:
-    print(f'OTHER_ERROR: {{type(e).__name__}}: {{e}}')
-'''
-        stdout, stderr = self._run_in_subprocess(code)
-        # Note: the fork guard only triggers if PID differs (fork scenario).
-        # In a normal subprocess without fork, the PID is the same, so this
-        # won't raise. The dynamic_classpath flag is primarily for forked
-        # processes (gunicorn workers). We just verify it doesn't crash.
-        self.assertIn(stdout, ['OK', 'NO_ERROR', 'FORK_ERROR', 'OTHER_INTERFACE_ERROR'],
-                      f'Unexpected output: {stdout}\nstderr: {stderr}')
-
-    def test_dynamic_load_bypasses_fork_guard(self):
-        """dynamic_classpath flag bypasses the fork-after-JVM-start guard."""
-        mock_jar = self._find_mock_jar()
-        code = f'''
-import jaydebeapiarrow, os
-
-# Start JVM
-conn1 = jaydebeapiarrow.connect(
-    'org.jaydebeapi.mockdriver.MockDriver',
-    'jdbc:jaydebeapi://dummyurl'
-)
-conn1.close()
-
-# Simulate fork: change _jvm_started_pid to a different PID
-jaydebeapiarrow._jvm_started_pid = os.getpid() + 99999
-
-# Without flag — should raise
-try:
-    conn2 = jaydebeapiarrow.connect(
-        'org.jaydebeapi.mockdriver.MockDriver',
-        'jdbc:jaydebeapi://dummyurl',
-        jars={repr(mock_jar)}
-    )
-    print('NO_ERROR')
-except jaydebeapiarrow.InterfaceError as e:
-    print('FORK_ERROR')
-
-# With flag — should succeed
-try:
-    conn3 = jaydebeapiarrow.connect(
-        'org.jaydebeapi.mockdriver.MockDriver',
-        'jdbc:jaydebeapi://dummyurl',
-        jars={repr(mock_jar)},
-        experimental={{'dynamic_classpath': True}}
-    )
-    conn3.close()
-    print('DYNAMIC_OK')
-except Exception as e:
-    print(f'DYNAMIC_FAIL: {{type(e).__name__}}: {{e}}')
-'''
-        stdout, stderr = self._run_in_subprocess(code)
-        lines = stdout.split('\n')
-        self.assertEqual(lines[0], 'FORK_ERROR',
-                         f'Expected fork error without flag, got: {stdout}\nstderr: {stderr}')
-        self.assertEqual(lines[1], 'DYNAMIC_OK',
-                         f'Dynamic load should bypass fork guard, got: {stdout}\nstderr: {stderr}')
