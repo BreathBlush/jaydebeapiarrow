@@ -43,6 +43,11 @@ class MSSQLTest(IntegrationTestBase, unittest.TestCase):
         self.sql_file(os.path.join(_THIS_DIR, 'data', 'create_mssql.sql'))
         self.sql_file(os.path.join(_THIS_DIR, 'data', 'insert.sql'))
 
+    def _cleanup_tables(self):
+        with self.conn.cursor() as cursor:
+            cursor.execute("USE test_db")
+        super()._cleanup_tables()
+
     def tearDown(self):
         with self.conn.cursor() as cursor:
             cursor.execute("USE test_db")

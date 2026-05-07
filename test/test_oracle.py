@@ -131,3 +131,9 @@ class OracleTest(IntegrationTestBase, unittest.TestCase):
             "NUM_NEG NUMBER(10, 2), "
             "PRIMARY KEY (ID))"
         )
+
+    def test_long_query_string_18k_characters(self):
+        self.skipTest("Oracle has a 1000-element limit on IN clauses")
+
+    def test_varchar_columns_return_data(self):
+        self.skipTest("Oracle requires TO_TIMESTAMP for date string literals")

@@ -333,3 +333,47 @@ class DrillTest(IntegrationTestBase, unittest.TestCase):
     def test_varchar_columns_return_data(self):
         """Drill does not support INSERT INTO ... VALUES."""
         self.skipTest("Drill does not support INSERT INTO ... VALUES")
+
+    def test_iterator_closed_after_fetchall(self):
+        with self.conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM dfs.tmp.account")
+            cursor.fetchall()
+            self.assertIsNone(cursor._iter)
+
+    def test_iterator_closed_after_fetchone_exhaustion(self):
+        with self.conn.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) FROM dfs.tmp.account")
+            cursor.fetchone()
+            result = cursor.fetchone()
+            self.assertIsNone(result)
+            self.assertIsNone(cursor._iter)
+
+    def test_iterator_closed_after_fetchmany_exhaustion(self):
+        with self.conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM dfs.tmp.account")
+            cursor.fetchmany(size=1000)
+            self.assertIsNone(cursor._iter)
+
+    def test_repeated_query_cycles_release_resources(self):
+        with self.conn.cursor() as cursor:
+            for _ in range(5):
+                cursor.execute("SELECT * FROM dfs.tmp.account")
+                result = cursor.fetchall()
+                self.assertTrue(len(result) > 0)
+                self.assertIsNone(cursor._iter)
+                self.assertEqual(cursor._buffer, [])
+
+    def test_long_query_string_18k_characters(self):
+        long_query = ("SELECT ACCOUNT_NO FROM dfs.tmp.account WHERE ACCOUNT_NO IN ("
+                      + ",".join(str(i) for i in range(5000)) + ")")
+        self.assertGreater(len(long_query), 18000)
+        with self.conn.cursor() as cursor:
+            cursor.execute(long_query)
+            result = cursor.fetchall()
+        self.assertIsInstance(result, list)
+        self.assertEqual(len(result), 3)
+        returned_ids = sorted(row[0] for row in result)
+        self.assertEqual(returned_ids, [18, 19, 20])
+
+    def test_description_returns_column_alias(self):
+        self.skipTest("Drill does not support quoted identifiers")

@@ -122,3 +122,15 @@ class TrinoTest(IntegrationTestBase, unittest.TestCase):
     def test_varchar_columns_return_data(self):
         """Trino memory connector does not support INSERT INTO ... VALUES."""
         self.skipTest("Trino memory connector does not support INSERT INTO ... VALUES")
+
+    def test_commit_with_autocommit_disabled(self):
+        self.skipTest("Trino memory connector does not support transactions")
+
+    def test_commit_with_autocommit_enabled(self):
+        self.skipTest("Trino memory connector does not support transactions")
+
+    def test_rollback_with_autocommit_disabled(self):
+        self.skipTest("Trino memory connector does not support transactions")
+
+    def test_rollback_with_autocommit_enabled(self):
+        self.skipTest("Trino memory connector does not support transactions")

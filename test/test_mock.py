@@ -22,7 +22,10 @@ from datetime import datetime
 from decimal import Decimal
 import os
 
-from test._base import _SUPPRESS_LOGGING_ARGS
+try:
+    from test._base import _SUPPRESS_LOGGING_ARGS
+except ImportError:
+    from _base import _SUPPRESS_LOGGING_ARGS
 
 try:
     import unittest2 as unittest
