@@ -517,6 +517,33 @@ class MockTest(unittest.TestCase):
             except jaydebeapiarrow.InterfaceError as e:
                 self.assertIn("RuntimeException: expected", str(e))
 
+    def test_runtime_exception_on_execute_includes_cause_chain(self):
+        """RuntimeException with a nested cause should include the cause message."""
+        self.conn.jconn.mockExceptionOnExecuteWithCause(
+            "java.lang.RuntimeException",
+            "outer error",
+            "java.io.IOException",
+            "Connection reset by peer")
+        with self.conn.cursor() as cursor:
+            try:
+                cursor.execute("dummy stmt")
+                self.fail("expected exception")
+            except jaydebeapiarrow.InterfaceError as e:
+                msg = str(e)
+                self.assertIn("RuntimeException: outer error", msg)
+                self.assertIn("Connection reset by peer", msg)
+
+    def test_runtime_exception_on_execute_no_duplicate_classname(self):
+        """Error message should not contain duplicated Java class names."""
+        self.conn.jconn.mockExceptionOnExecute("java.lang.RuntimeException", "expected")
+        with self.conn.cursor() as cursor:
+            try:
+                cursor.execute("dummy stmt")
+                self.fail("expected exception")
+            except jaydebeapiarrow.InterfaceError as e:
+                msg = str(e)
+                self.assertNotIn("java.lang.java.lang", msg)
+
     def test_sql_exception_on_commit(self):
         self.conn.jconn.mockExceptionOnCommit("java.sql.SQLException", "expected")
         try:

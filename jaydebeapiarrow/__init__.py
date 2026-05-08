@@ -120,6 +120,21 @@ old_jpype = False
 # deadlocks if JPype spawns threads during initialisation.
 _jvm_startup_lock = threading.Lock()
 _jvm_starting = False
+
+def _build_java_exception_message(exc):
+    """Build a clean error message from a Java exception, walking the cause
+    chain to surface wrapped exceptions. Avoids the duplicated class-name
+    artefact that JPype 1.7.0+ produces via ``str(exc)``."""
+    parts = []
+    current = exc
+    depth = 0
+    while current is not None and depth < 20:
+        cls_name = current.getClass().getName()
+        msg = str(current.getMessage()) if current.getMessage() else ""
+        parts.append(f"{cls_name}: {msg}" if msg else cls_name)
+        current = current.getCause()
+        depth += 1
+    return "\n  Caused by: ".join(parts)
 _jvm_started_pid = None
 
 def _handle_sql_exception_jpype():
@@ -136,8 +151,9 @@ def _handle_sql_exception_jpype():
         exc_type = DatabaseError
     else:
         exc_type = InterfaceError
-        
-    reraise(exc_type, exc_info[1], exc_info[2])
+
+    message = _build_java_exception_message(exc_info[1])
+    reraise(exc_type, message, exc_info[2])
 
 def _dynamic_load_driver(jclassname, jars):
     """Load a JDBC driver from JARs after JVM start using the DriverShim pattern.
@@ -847,7 +863,10 @@ class Cursor(object):
             parameters = ()
         self._close_last()
         self.lastrowid = None
-        self._prep = self._connection.jconn.prepareStatement(operation)
+        try:
+            self._prep = self._connection.jconn.prepareStatement(operation)
+        except:
+            _handle_sql_exception()
         self._set_stmt_parms(self._prep, parameters, is_batch=False)
         try:
             is_rs = self._prep.execute()
@@ -864,9 +883,15 @@ class Cursor(object):
     def executemany(self, operation, seq_of_parameters):
         self._close_last()
         self.lastrowid = None
-        self._prep = self._connection.jconn.prepareStatement(operation)
+        try:
+            self._prep = self._connection.jconn.prepareStatement(operation)
+        except:
+            _handle_sql_exception()
         self._set_stmt_parms(self._prep, seq_of_parameters, is_batch=True)
-        update_counts = self._prep.executeBatch()
+        try:
+            update_counts = self._prep.executeBatch()
+        except:
+            _handle_sql_exception()
         # self._prep.getWarnings() ???
         self.rowcount = sum(update_counts)
         self._close_last()
