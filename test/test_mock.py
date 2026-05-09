@@ -21,6 +21,9 @@ import jaydebeapiarrow
 from datetime import datetime
 from decimal import Decimal
 import os
+import sys
+import threading
+from functools import partial
 
 try:
     from test._base import _SUPPRESS_LOGGING_ARGS
@@ -1174,3 +1177,43 @@ class MockTest(unittest.TestCase):
     def test_lastrowid_none_after_executemany(self):
         """lastrowid should be None after executemany (mock driver limitation: skip)."""
         self.skipTest("Mock driver executeBatch returns None; covered by integration test")
+
+
+class ParallelConnectTest(unittest.TestCase):
+    """Test that parallel connect() calls are thread-safe (issue #60)."""
+
+    def test_parallel_connects_after_jvm_started(self):
+        """Multiple threads connecting simultaneously should not crash."""
+        errors = []
+
+        def connect_thread(idx):
+            import jpype
+            try:
+                conn = jaydebeapiarrow.connect(
+                    'org.jaydebeapi.mockdriver.MockDriver',
+                    'jdbc:jaydebeapi://dummyurl%d' % idx)
+                # Verify the connection is usable
+                self.assertIsNotNone(conn)
+                conn.close()
+            except Exception as e:
+                errors.append(e)
+            finally:
+                if jpype.isThreadAttachedToJVM():
+                    jpype.detachThreadFromJVM()
+
+        threads = []
+        for i in range(5):
+            t = threading.Thread(target=partial(connect_thread, i))
+            threads.append(t)
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [], f"Thread errors: {errors}")
+
+    def test_jvm_startup_lock_exists(self):
+        """The _jvm_startup_lock should be a threading.Lock."""
+        self.assertTrue(hasattr(jaydebeapiarrow, '_jvm_startup_lock'))
+        self.assertIsInstance(jaydebeapiarrow._jvm_startup_lock, type(threading.Lock()))
+        self.assertTrue(hasattr(jaydebeapiarrow, '_jvm_starting'))

@@ -32,6 +32,7 @@ import datetime
 from decimal import Decimal
 import glob
 import os
+import threading
 import time
 import sys
 import warnings
@@ -111,6 +112,14 @@ _handle_sql_exception = None
 
 old_jpype = False
 
+# Flag and lock to prevent race condition when multiple threads call
+# connect() simultaneously — without this, two threads can both see
+# isJVMStarted() return False and both attempt to start the JVM,
+# causing a crash.  The lock is only held briefly to check/set the
+# flag; startJVM() runs _outside_ the lock to avoid potential
+# deadlocks if JPype spawns threads during initialisation.
+_jvm_startup_lock = threading.Lock()
+_jvm_starting = False
 _jvm_started_pid = None
 
 def _handle_sql_exception_jpype():
@@ -199,7 +208,7 @@ def _dynamic_load_driver(jclassname, jars):
 
 def _jdbc_connect_jpype(jclassname, url, driver_args, jars, libs, experimental=None):
     import jpype
-    global _jvm_started_pid
+    global _jvm_starting, _jvm_started_pid
 
     _experimental = experimental or {}
 
@@ -214,59 +223,85 @@ def _jdbc_connect_jpype(jclassname, url, driver_args, jars, libs, experimental=N
                 "lazy connections)." % (_jvm_started_pid, os.getpid())
             )
 
-    if not _is_jvm_started():
-        class_path = []
-        if jars:
-            class_path.extend(jars)
-        class_path.extend(_get_classpath())
-        class_path.extend(_get_arrow_jar_paths())
-        class_path = list(set(class_path))
-
-        args = []
-
-        if libs:
-            # path to shared libraries
-            libs_path = os.path.pathsep.join(libs)
-            args.append('-Djava.library.path=%s' % libs_path)
-
-        # Known issue: some JDBC drivers (notably IBM Db2) use the JVM's
-        # default charset for string conversion.  When the default is not
-        # UTF-8, non-ASCII characters (German umlauts, CJK, emoji) cause
-        # CharConversionException during result-set traversal.  Users who
-        # encounter this should pass jvm_args=['-Dfile.encoding=UTF-8']
-        # when calling connect().
-        # TODO: document this encoding requirement in user-facing docs
-        # and consider exposing a dedicated encoding parameter in connect().
-
-        # Add-opens for Apache Arrow on Java 9+
-        args.append('--add-opens=java.base/java.nio=ALL-UNNAMED')
-        # Drill's javassist needs reflective access to ClassLoader.defineClass
-        args.append('--add-opens=java.base/java.lang=ALL-UNNAMED')
-        # User-supplied extra JVM arguments (e.g. logging suppression)
-        args.extend(_experimental.get('jvm_args', []))
-
-        # jvm_path = ('/usr/lib/jvm/java-6-openjdk'
-        #             '/jre/lib/i386/client/libjvm.so')
-        jvm_path = jpype.getDefaultJVMPath()
-        global old_jpype
-        if hasattr(jpype, '__version__'):
-            try:
-                ver_match = re.match(r'\d+\.\d+', jpype.__version__)
-                if ver_match:
-                    jpype_ver = float(ver_match.group(0))
-                    if jpype_ver < 0.7:
-                        old_jpype = True
-            except ValueError:
-                pass
-        if old_jpype:
-            jpype.startJVM(jvm_path, *args,
-                           classpath=class_path)
+    # Brief lock: decide who starts the JVM (if needed).
+    with _jvm_startup_lock:
+        if _is_jvm_started():
+            should_start = False
+        elif _jvm_starting:
+            # Another thread is already starting the JVM; wait for it.
+            should_start = False
         else:
-            jpype.startJVM(jvm_path, *args, ignoreUnrecognized=True,
-                           convertStrings=True,
-                           classpath=class_path)
-        _jvm_started_pid = os.getpid()
+            _jvm_starting = True
+            should_start = True
 
+    if should_start:
+        try:
+            class_path = []
+            if jars:
+                class_path.extend(jars)
+            class_path.extend(_get_classpath())
+            class_path.extend(_get_arrow_jar_paths())
+            class_path = list(set(class_path))
+
+            args = []
+
+            if libs:
+                # path to shared libraries
+                libs_path = os.path.pathsep.join(libs)
+                args.append('-Djava.library.path=%s' % libs_path)
+
+            # Known issue: some JDBC drivers (notably IBM Db2) use the JVM's
+            # default charset for string conversion.  When the default is not
+            # UTF-8, non-ASCII characters (German umlauts, CJK, emoji) cause
+            # CharConversionException during result-set traversal.  Users who
+            # encounter this should pass jvm_args=['-Dfile.encoding=UTF-8']
+            # when calling connect().
+            # TODO: document this encoding requirement in user-facing docs
+            # and consider exposing a dedicated encoding parameter in connect().
+
+            # Add-opens for Apache Arrow on Java 9+
+            args.append('--add-opens=java.base/java.nio=ALL-UNNAMED')
+            # Drill's javassist needs reflective access to ClassLoader.defineClass
+            args.append('--add-opens=java.base/java.lang=ALL-UNNAMED')
+            # User-supplied extra JVM arguments (e.g. logging suppression)
+            args.extend(_experimental.get('jvm_args', []))
+
+            # jvm_path = ('/usr/lib/jvm/java-6-openjdk'
+            #             '/jre/lib/i386/client/libjvm.so')
+            jvm_path = jpype.getDefaultJVMPath()
+            global old_jpype
+            if hasattr(jpype, '__version__'):
+                try:
+                    ver_match = re.match(r'\d+\.\d+', jpype.__version__)
+                    if ver_match:
+                        jpype_ver = float(ver_match.group(0))
+                        if jpype_ver < 0.7:
+                            old_jpype = True
+                except ValueError:
+                    pass
+            if old_jpype:
+                jpype.startJVM(jvm_path, *args,
+                               classpath=class_path)
+            else:
+                jpype.startJVM(jvm_path, *args, ignoreUnrecognized=True,
+                               convertStrings=True,
+                               classpath=class_path)
+            _jvm_started_pid = os.getpid()
+        finally:
+            with _jvm_startup_lock:
+                _jvm_starting = False
+    elif not _is_jvm_started():
+        # Another thread is starting the JVM; spin-wait until ready.
+        waited = 0
+        while not _is_jvm_started():
+            if not _jvm_starting:
+                # Startup thread failed; bail out so the caller sees the
+                # original exception (or retries on the next connect()).
+                break
+            time.sleep(0.05)
+            waited += 0.05
+            if waited > 120:
+                raise RuntimeError("Timed out waiting for JVM to start")
     if not jpype.java.lang.Thread.isAttached():
         jpype.attachThreadToJVM()
         jpype.java.lang.Thread.currentThread().setContextClassLoader(jpype.java.lang.ClassLoader.getSystemClassLoader())
