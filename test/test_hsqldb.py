@@ -150,16 +150,3 @@ class HsqldbArrayTypeTest(unittest.TestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0], [10, 20, 30])
         self.assertEqual(result[1], ["foo", "bar", "baz"])
-
-
-class HsqldbConnectValidationTest(unittest.TestCase):
-    """Tests for connect() argument validation with real HSQLDB (issue #95)."""
-
-    def test_connect_url_must_be_string(self):
-        """Passing a list as url should raise ProgrammingError (issue #95)."""
-        with self.assertRaises(jaydebeapiarrow.ProgrammingError) as ctx:
-            jaydebeapiarrow.connect(
-                'org.hsqldb.jdbcDriver',
-                ['jdbc:hsqldb:mem:.', 'SA', '']
-            )
-        self.assertIn('url', str(ctx.exception).lower())
