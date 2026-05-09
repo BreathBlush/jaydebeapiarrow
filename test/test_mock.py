@@ -40,7 +40,7 @@ class MockTest(unittest.TestCase):
     def setUp(self):
         self.conn = jaydebeapiarrow.connect('org.jaydebeapi.mockdriver.MockDriver',
                                        'jdbc:jaydebeapi://dummyurl',
-                                       experimental={'jvm_args': _SUPPRESS_LOGGING_ARGS})
+                                       jvm_args=_SUPPRESS_LOGGING_ARGS)
 
     def tearDown(self):
         self.conn.close()
@@ -586,7 +586,7 @@ class MockTest(unittest.TestCase):
     def test_connection_with_statement(self):
         with jaydebeapiarrow.connect('org.jaydebeapi.mockdriver.MockDriver',
                                        'jdbc:jaydebeapi://dummyurl',
-                                       experimental={'jvm_args': _SUPPRESS_LOGGING_ARGS}) as conn:
+                                       jvm_args=_SUPPRESS_LOGGING_ARGS) as conn:
             self.assertEqual(conn._closed, False)
         self.assertEqual(conn._closed, True)
 
@@ -1046,7 +1046,7 @@ class MockTest(unittest.TestCase):
             self.conn = jaydebeapiarrow.connect(
                 'org.jaydebeapi.mockdriver.MockDriver',
                 'jdbc:jaydebeapi://dummyurl',
-                experimental={'jvm_args': _SUPPRESS_LOGGING_ARGS})
+                jvm_args=_SUPPRESS_LOGGING_ARGS)
         jpype_warnings = [w for w in caught
                           if issubclass(w.category, DeprecationWarning)
                           and 'jpype' in str(w.message).lower()]

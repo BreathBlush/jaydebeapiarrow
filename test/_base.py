@@ -101,8 +101,7 @@ class IntegrationTestBase(object):
     def _quiet_connect(*args, **kwargs):
         """Wrapper around jaydebeapiarrow.connect() that silences Java
         loggers (slf4j-simple and java.util.logging) on the first call."""
-        kwargs.setdefault('experimental', {})
-        kwargs['experimental'].setdefault('jvm_args', _SUPPRESS_LOGGING_ARGS)
+        kwargs.setdefault('jvm_args', _SUPPRESS_LOGGING_ARGS)
         return jaydebeapiarrow.connect(*args, **kwargs)
 
     @staticmethod
