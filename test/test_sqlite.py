@@ -122,6 +122,14 @@ class SqliteXerialTest(SqliteTestBase, unittest.TestCase):
         """SQLite Xerial JDBC truncates microseconds via date_string_format."""
         self.skipTest("SQLite Xerial JDBC truncates microsecond precision")
 
+    def test_lastrowid_none_after_insert(self):
+        """SQLite has implicit ROWID, so getGeneratedKeys returns the rowid."""
+        stmt = "insert into ACCOUNT (ACCOUNT_ID, ACCOUNT_NO, BALANCE) " \
+               "values (?, ?, ?)"
+        with self.conn.cursor() as cursor:
+            cursor.execute(stmt, (self.dbapi.Timestamp(2009, 9, 11, 14, 15, 22, 123450), 99, 1.0))
+            self.assertIsNotNone(cursor.lastrowid)
+
     def test_execute_and_fetch_parameter(self):
         with self.conn.cursor() as cursor:
             cursor.execute("select ACCOUNT_ID, ACCOUNT_NO, BALANCE, BLOCKING " \

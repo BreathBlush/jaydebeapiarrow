@@ -892,7 +892,7 @@ class Cursor(object):
         self._close_last()
         self.lastrowid = None
         try:
-            self._prep = self._connection.jconn.prepareStatement(operation)
+            self._prep = self._connection.jconn.prepareStatement(operation, 1)
         except:
             _handle_sql_exception()
         self._set_stmt_parms(self._prep, parameters, is_batch=False)
@@ -918,7 +918,7 @@ class Cursor(object):
         self._close_last()
         self.lastrowid = None
         try:
-            self._prep = self._connection.jconn.prepareStatement(operation)
+            self._prep = self._connection.jconn.prepareStatement(operation, 1)
         except:
             _handle_sql_exception()
         self._set_stmt_parms(self._prep, seq_of_parameters, is_batch=True)
