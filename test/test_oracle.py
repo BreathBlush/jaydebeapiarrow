@@ -7,9 +7,9 @@ import unittest
 from decimal import Decimal
 from datetime import datetime
 try:
-    from test._base import IntegrationTestBase, _THIS_DIR, _SUPPRESS_LOGGING_ARGS
+    from test._base import IntegrationTestBase, _THIS_DIR
 except ImportError:
-    from _base import IntegrationTestBase, _THIS_DIR, _SUPPRESS_LOGGING_ARGS
+    from _base import IntegrationTestBase, _THIS_DIR
 
 
 class OracleTest(IntegrationTestBase, unittest.TestCase):
@@ -30,9 +30,8 @@ class OracleTest(IntegrationTestBase, unittest.TestCase):
         )
 
         try:
-            db, conn = jaydebeapiarrow, jaydebeapiarrow.connect(
-                driver, url, driver_args,
-                experimental={'jvm_args': _SUPPRESS_LOGGING_ARGS})
+            db, conn = jaydebeapiarrow, self._quiet_connect(
+                driver, url, driver_args)
         except jpype.JException:
             self.fail("Can not connect with Oracle. Please check if the instance is up and running.")
         else:

@@ -239,7 +239,7 @@ def _dynamic_load_driver(jclassname, jars):
     return url_cl
 
 
-def _jdbc_connect_jpype(jclassname, url, driver_args, jars, libs, experimental=None):
+def _jdbc_connect_jpype(jclassname, url, driver_args, jars, libs, jvm_args=None, experimental=None):
     import jpype
     global _jvm_starting, _jvm_started_pid
 
@@ -297,7 +297,7 @@ def _jdbc_connect_jpype(jclassname, url, driver_args, jars, libs, experimental=N
             # Drill's javassist needs reflective access to ClassLoader.defineClass
             args.append('--add-opens=java.base/java.lang=ALL-UNNAMED')
             # User-supplied extra JVM arguments (e.g. logging suppression)
-            args.extend(_experimental.get('jvm_args', []))
+            args.extend(jvm_args or [])
 
             # jvm_path = ('/usr/lib/jvm/java-6-openjdk'
             #             '/jre/lib/i386/client/libjvm.so')
@@ -573,7 +573,7 @@ def TimestampFromTicks(ticks):
     return Timestamp(*time.localtime(ticks)[:6])
 
 # DB-API 2.0 Module Interface connect constructor
-def connect(jclassname, url, driver_args=None, jars=None, libs=None, experimental=None):
+def connect(jclassname, url, driver_args=None, jars=None, libs=None, jvm_args=None, experimental=None):
     """Open a connection to a database using a JDBC driver and return
     a Connection instance.
 
@@ -589,16 +589,24 @@ def connect(jclassname, url, driver_args=None, jars=None, libs=None, experimenta
     jars: Jar filename or sequence of filenames for the JDBC driver
     libs: Dll/so filenames or sequence of dlls/sos used as shared
           library by the JDBC driver
+    jvm_args: Optional list of extra JVM arguments passed to startJVM().
+          Only takes effect on the first connect() call (when the JVM
+          is started). Ignored on subsequent calls.
     experimental: Optional dict of experimental feature flags.
           Supported keys:
             dynamic_classpath (bool): If True, allow loading JDBC drivers
               from JARs after the JVM has already been started, using a
               DriverShim proxy.  This also bypasses the fork-after-JVM-start
               guard, making it suitable for gunicorn --preload workers.
-            jvm_args (list[str]): Extra JVM arguments passed to startJVM().
-              Only takes effect on the first connect() call (when the JVM
-              is started). Ignored on subsequent calls.
     """
+    if not isinstance(url, str):
+        raise ProgrammingError(
+            "The 'url' parameter must be a JDBC connection string, "
+            "not %s. If you meant to pass connection credentials, "
+            "use the 'driver_args' parameter. "
+            "Usage: connect(jclassname, url, driver_args=None, jars=None, libs=None)"
+            % type(url).__name__
+        )
     if isinstance(driver_args, str):
         driver_args = [ driver_args ]
     if not driver_args:
@@ -615,7 +623,7 @@ def connect(jclassname, url, driver_args=None, jars=None, libs=None, experimenta
         libs = []
     if experimental is None:
         experimental = {}
-    jconn = _jdbc_connect(jclassname, url, driver_args, jars, libs, experimental=experimental)
+    jconn = _jdbc_connect(jclassname, url, driver_args, jars, libs, jvm_args=jvm_args, experimental=experimental)
     return Connection(jconn, jclassname)
 
 # DB-API 2.0 Connection Object

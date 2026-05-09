@@ -78,6 +78,15 @@ class IntegrationTestBase(object):
         self._cleanup_tables()
         self.setUpSql()
 
+    def test_connect_url_must_be_string(self):
+        """Passing a list as url should raise ProgrammingError (issue #95)."""
+        with self.assertRaises(jaydebeapiarrow.ProgrammingError) as ctx:
+            jaydebeapiarrow.connect(
+                'org.hsqldb.jdbcDriver',
+                ['jdbc:hsqldb:mem:.', 'SA', '']
+            )
+        self.assertIn('url', str(ctx.exception).lower())
+
     def _cleanup_tables(self):
         """Drop any leftover tables from a previous failed test run."""
         with self.conn.cursor() as cursor:
@@ -92,8 +101,7 @@ class IntegrationTestBase(object):
     def _quiet_connect(*args, **kwargs):
         """Wrapper around jaydebeapiarrow.connect() that silences Java
         loggers (slf4j-simple and java.util.logging) on the first call."""
-        kwargs.setdefault('experimental', {})
-        kwargs['experimental'].setdefault('jvm_args', _SUPPRESS_LOGGING_ARGS)
+        kwargs.setdefault('jvm_args', _SUPPRESS_LOGGING_ARGS)
         return jaydebeapiarrow.connect(*args, **kwargs)
 
     @staticmethod

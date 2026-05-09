@@ -18,9 +18,8 @@ class HsqldbTest(IntegrationTestBase, unittest.TestCase):
         driver, url, driver_args = ( 'org.hsqldb.jdbcDriver',
                                      'jdbc:hsqldb:mem:.',
                                      ['SA', ''] )
-        return jaydebeapiarrow, jaydebeapiarrow.connect(
-            driver, url, driver_args,
-            experimental={'jvm_args': _SUPPRESS_LOGGING_ARGS})
+        return jaydebeapiarrow, self._quiet_connect(
+            driver, url, driver_args)
 
     def setUpSql(self):
         self.sql_file(os.path.join(_THIS_DIR, 'data', 'create_hsqldb.sql'))
@@ -34,7 +33,7 @@ class HsqldbMultipleConnectionsTest(unittest.TestCase):
         driver = 'org.hsqldb.jdbcDriver'
         url = f'jdbc:hsqldb:mem:{db_name}'
         return jaydebeapiarrow.connect(driver, url, ['SA', ''],
-                                       experimental={'jvm_args': _SUPPRESS_LOGGING_ARGS})
+                                       jvm_args=_SUPPRESS_LOGGING_ARGS)
 
     def test_sequential_connections(self):
         """Connect, query, close, then connect again — each cycle should succeed."""
@@ -71,7 +70,7 @@ class HsqldbArrayTypeTest(unittest.TestCase):
         self.conn = jaydebeapiarrow.connect(
             'org.hsqldb.jdbcDriver', 'jdbc:hsqldb:mem:arraytest',
             ['SA', ''],
-            experimental={'jvm_args': _SUPPRESS_LOGGING_ARGS})
+            jvm_args=_SUPPRESS_LOGGING_ARGS)
         with self.conn.cursor() as cursor:
             cursor.execute(
                 "CREATE TABLE test_arrays ("

@@ -40,7 +40,7 @@ class MockTest(unittest.TestCase):
     def setUp(self):
         self.conn = jaydebeapiarrow.connect('org.jaydebeapi.mockdriver.MockDriver',
                                        'jdbc:jaydebeapi://dummyurl',
-                                       experimental={'jvm_args': _SUPPRESS_LOGGING_ARGS})
+                                       jvm_args=_SUPPRESS_LOGGING_ARGS)
 
     def tearDown(self):
         self.conn.close()
@@ -586,7 +586,7 @@ class MockTest(unittest.TestCase):
     def test_connection_with_statement(self):
         with jaydebeapiarrow.connect('org.jaydebeapi.mockdriver.MockDriver',
                                        'jdbc:jaydebeapi://dummyurl',
-                                       experimental={'jvm_args': _SUPPRESS_LOGGING_ARGS}) as conn:
+                                       jvm_args=_SUPPRESS_LOGGING_ARGS) as conn:
             self.assertEqual(conn._closed, False)
         self.assertEqual(conn._closed, True)
 
@@ -1046,7 +1046,7 @@ class MockTest(unittest.TestCase):
             self.conn = jaydebeapiarrow.connect(
                 'org.jaydebeapi.mockdriver.MockDriver',
                 'jdbc:jaydebeapi://dummyurl',
-                experimental={'jvm_args': _SUPPRESS_LOGGING_ARGS})
+                jvm_args=_SUPPRESS_LOGGING_ARGS)
         jpype_warnings = [w for w in caught
                           if issubclass(w.category, DeprecationWarning)
                           and 'jpype' in str(w.message).lower()]
@@ -1317,3 +1317,25 @@ class ParallelConnectTest(unittest.TestCase):
         self.assertTrue(hasattr(jaydebeapiarrow, '_jvm_startup_lock'))
         self.assertIsInstance(jaydebeapiarrow._jvm_startup_lock, type(threading.Lock()))
         self.assertTrue(hasattr(jaydebeapiarrow, '_jvm_starting'))
+
+
+class ConnectValidationTest(unittest.TestCase):
+    """Tests for connect() argument validation (issue #95)."""
+
+    def test_url_must_be_string_not_list(self):
+        """Passing a list as url should raise ProgrammingError."""
+        with self.assertRaises(jaydebeapiarrow.ProgrammingError) as ctx:
+            jaydebeapiarrow.connect(
+                'org.jaydebeapi.mockdriver.MockDriver',
+                ['jdbc:jaydebeapi://dummyurl', 'user', 'pass']
+            )
+        self.assertIn('url', str(ctx.exception).lower())
+
+    def test_url_must_be_string_not_dict(self):
+        """Passing a dict as url should raise ProgrammingError."""
+        with self.assertRaises(jaydebeapiarrow.ProgrammingError) as ctx:
+            jaydebeapiarrow.connect(
+                'org.jaydebeapi.mockdriver.MockDriver',
+                {'user': 'sa', 'password': ''}
+            )
+        self.assertIn('url', str(ctx.exception).lower())

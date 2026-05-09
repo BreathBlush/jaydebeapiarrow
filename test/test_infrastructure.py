@@ -22,8 +22,7 @@ except ImportError:
 
 def _connect(*args, **kwargs):
     """Wrapper that injects logging suppression JVM args on first connect."""
-    kwargs.setdefault('experimental', {})
-    kwargs['experimental'].setdefault('jvm_args', _SUPPRESS_LOGGING_ARGS)
+    kwargs.setdefault('jvm_args', _SUPPRESS_LOGGING_ARGS)
     return jaydebeapiarrow.connect(*args, **kwargs)
 
 
