@@ -321,13 +321,13 @@ class IntegrationTestBase(object):
             cursor.execute("select * from ACCOUNT")
             self.assertIsNone(cursor.lastrowid)
 
-    def test_lastrowid_none_after_insert(self):
-        """lastrowid should be None after INSERT (JDBC doesn't expose rowid)."""
+    def test_lastrowid_after_insert(self):
+        """lastrowid should return generated key after INSERT."""
         stmt = "insert into ACCOUNT (ACCOUNT_ID, ACCOUNT_NO, BALANCE) " \
                "values (?, ?, ?)"
         with self.conn.cursor() as cursor:
             cursor.execute(stmt, (self.dbapi.Timestamp(2009, 9, 11, 14, 15, 22, 123450), 99, 1.0))
-            self.assertIsNone(cursor.lastrowid)
+            self.assertIsNotNone(cursor.lastrowid)
 
     def test_lastrowid_none_after_executemany(self):
         """lastrowid should be None after executemany."""
