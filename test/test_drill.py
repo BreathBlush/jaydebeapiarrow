@@ -326,6 +326,10 @@ class DrillTest(IntegrationTestBase, unittest.TestCase):
         """Drill does not support parameterized INSERT."""
         self.skipTest("Drill does not support parameterized INSERT queries")
 
+    def test_execute_param_datetime(self):
+        """Drill does not support parameterized INSERT."""
+        self.skipTest("Drill does not support parameterized INSERT queries")
+
     def test_timestamp_utc_roundtrip_no_timezone_shift(self):
         """Drill does not support parameterized INSERT."""
         self.skipTest("Drill does not support parameterized INSERT queries")

@@ -303,7 +303,7 @@ def _jdbc_connect_jpype(jclassname, url, driver_args, jars, libs, experimental=N
             if waited > 120:
                 raise RuntimeError("Timed out waiting for JVM to start")
     if not jpype.java.lang.Thread.isAttached():
-        jpype.attachThreadToJVM()
+        jpype.java.lang.Thread.attach()
         jpype.java.lang.Thread.currentThread().setContextClassLoader(jpype.java.lang.ClassLoader.getSystemClassLoader())
     try:
         import pyarrow.jvm
@@ -337,7 +337,38 @@ def _get_classpath():
     expanded_cp = []
     for i in orig_cp.split(os.path.pathsep):
         expanded_cp.extend(_jar_glob(i))
-    return expanded_cp
+    return _deduplicate_jars(expanded_cp)
+
+def _deduplicate_jars(jars):
+    """Keep only the newest JAR when duplicates (same basename) exist."""
+    import logging
+    # First pass: deduplicate by real path (same file found by different glob
+    # patterns, e.g. dir/*.jar and dir/**/*.jar).
+    by_realpath = {}
+    for jar in jars:
+        rp = os.path.realpath(jar)
+        if rp not in by_realpath:
+            by_realpath[rp] = jar
+    # Second pass: deduplicate by basename, keeping newest, warn on conflicts.
+    seen = {}
+    for jar in by_realpath.values():
+        name = os.path.basename(jar)
+        if name not in seen:
+            seen[name] = jar
+        else:
+            try:
+                if os.path.getmtime(jar) > os.path.getmtime(seen[name]):
+                    logging.getLogger(__name__).warning(
+                        "Duplicate JAR %s: keeping %s (newer) over %s",
+                        name, jar, seen[name])
+                    seen[name] = jar
+                else:
+                    logging.getLogger(__name__).warning(
+                        "Duplicate JAR %s: keeping %s (newer) over %s",
+                        name, seen[name], jar)
+            except OSError:
+                pass
+    return list(seen.values())
 
 def _jar_glob(item):
     if item.endswith('*'):
@@ -727,7 +758,8 @@ class Cursor(object):
             if isinstance(p, datetime.date):
                 return jpype.JClass("java.sql.Date").valueOf(p.isoformat())
             if isinstance(p, datetime.time):
-                return jpype.JClass("java.sql.Time").valueOf(p.strftime("%H:%M:%S"))
+                return jpype.JClass("java.sql.Time").valueOf(
+                    p.strftime("%H:%M:%S"))
             if isinstance(p, Decimal):
                 return jpype.JClass("java.math.BigDecimal")(str(p))
             if isinstance(p, list):
