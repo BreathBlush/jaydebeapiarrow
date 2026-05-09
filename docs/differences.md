@@ -14,30 +14,31 @@ This fork returns native Python types instead of strings for temporal and numeri
 | `DECIMAL` / `NUMERIC` | `float` (or `int` if scale=0) | `decimal.Decimal` (full precision preserved) |
 | `BINARY` | `str` (Java object `toString()`) | `memoryview` / `bytes` |
 | `TIMESTAMP_WITH_TIMEZONE` | Raw Java object (no dedicated converter) | `datetime.datetime` (timezone-aware, UTC) |
+| `ARRAY` | Raw Java object | `list` (nested by element type) |
 
 ## Features Removed from Parent
 
-- **Python 2 support** — only Python 3 is supported.
-- **Jython support** — only CPython + JPype is supported.
-- **`_java_sql_blob` / `_java_array_byte` constructors** — `Binary()` now returns `bytes` directly instead of a Java byte array.
+- **Python 2 support** - only Python 3 is supported.
+- **Jython support** - only CPython + JPype is supported.
+- **`_java_sql_blob` / `_java_array_byte` constructors** - `Binary()` now returns `bytes` directly instead of a Java byte array.
 
 ## Features Added in Fork
 
-- **Apache Arrow data path** — JDBC data is converted to Arrow record batches in-JVM and streamed to Python, avoiding row-by-row JPype serialization.
-- **`fetch_arrow_batches()`** — yields `pyarrow.RecordBatch` objects (zero-copy).
-- **`fetch_arrow_table()`** — returns a single `pyarrow.Table`.
-- **`fetch_df()`** — returns a `pandas.DataFrame` via the optimized Arrow path.
-- **`TIMESTAMP_WITH_TIMEZONE` support** — properly handled as timezone-aware `datetime` (the parent has no converter for this type).
-- **`set_debug()`** — enables JUL-level debug logging from the Java bridge.
+- **Apache Arrow data path** - JDBC data is converted to Arrow record batches in-JVM and exported to Python via the Arrow C Data Interface, avoiding row-by-row JPype serialization.
+- **`fetch_arrow_batches()`** - yields `pyarrow.RecordBatch` objects (zero-copy).
+- **`fetch_arrow_table()`** - returns a single `pyarrow.Table`.
+- **`fetch_df()`** - returns a `pandas.DataFrame` via the optimized Arrow path.
+- **`TIMESTAMP_WITH_TIMEZONE` support** - properly handled as timezone-aware `datetime` (the parent has no converter for this type).
+- **`set_debug()`** - enables JUL-level debug logging from the Java bridge.
 
 ### Type Mapping Improvements
 
-- **Complete DBAPITypeObject coverage** — `OTHER` → STRING, `NCLOB`/`SQLXML` → TEXT, `ROWID`, `ARRAY` are now registered. The parent omits these, causing `cursor.description` to return `None` for their type codes.
-- **ARRAY type detection** — columns reported as JDBC `ARRAY` are mapped to `VARCHAR` as a degraded fallback with a logged warning. Full ARRAY support is not available in the Arrow JDBC adapter.
-- **JSON/JSONB/UUID detection** — columns reported as JDBC `OTHER` with type names containing `JSON` or `UUID` (e.g., PostgreSQL) are explicitly mapped to `VARCHAR`.
+- **Complete DBAPITypeObject coverage** - `OTHER` -> STRING, `NCLOB`/`SQLXML` -> TEXT, `ROWID`, `ARRAY` are now registered. The parent omits these, causing `cursor.description` to return `None` for their type codes.
+- **ARRAY type support** - columns reported as JDBC `ARRAY` are read as Python `list` objects. Parameter binding for lists converts them to Java arrays (`int[]`, `String[]`, etc.) and binds via `setObject()`.
+- **JSON/JSONB/UUID detection** - columns reported as JDBC `OTHER` with type names containing `JSON` or `UUID` (e.g., PostgreSQL) are explicitly mapped to `VARCHAR`.
 
 ### Parameter Binding Improvements
 
-- **`bytes`/`bytearray` parameter binding** — the fallback `_to_java()` converter now converts Python bytes to Java `byte[]` for `BLOB`/`BINARY` columns.
-- **`None` parameter binding** — explicit passthrough for Python `None` → Java `null` via `setObject()`.
-- **`list` parameter binding rejected** — passing a `list` as a parameter raises `NotSupportedError` with a clear message, instead of failing with a cryptic Java type error.
+- **`bytes`/`bytearray` parameter binding** - the fallback `_to_java()` converter now converts Python bytes to Java `byte[]` for `BLOB`/`BINARY` columns.
+- **`None` parameter binding** - uses JDBC `setNull()` instead of `setObject(i, null)` for driver compatibility (e.g., Teradata rejects `setObject` with null).
+- **`list` parameter binding** - lists are converted to Java arrays and bound via `setObject()` for ARRAY columns.

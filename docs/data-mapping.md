@@ -34,7 +34,7 @@ JayDeBeApiArrow converts JDBC data types through two stages: **JDBC to Arrow** (
 |---|---|---|---|
 | `DATE` | `Date32` | `datetime.date` | |
 | `TIME` | `Time32` | `datetime.time` | |
-| `TIME_WITH_TIMEZONE` | `Utf8` | `str` | Fallback — not natively supported by Arrow |
+| `TIME_WITH_TIMEZONE` | `Utf8` | `str` | Fallback - not natively supported by Arrow |
 | `TIMESTAMP` | `Timestamp` | `datetime.datetime` | Naive (no timezone) |
 | `TIMESTAMP_WITH_TIMEZONE` | `Timestamp(tz=UTC)` | `datetime.datetime` | Timezone-aware, UTC |
 
@@ -51,7 +51,7 @@ JayDeBeApiArrow converts JDBC data types through two stages: **JDBC to Arrow** (
 
 | JDBC Type | Arrow Type | Python Type | Notes |
 |---|---|---|---|
-| `ARRAY` | `Utf8` | `str` | Fallback via `toString()` |
+| `ARRAY` | `list` | `list` | Nested list per element type (e.g. `[1, 2, 3]` for `INT ARRAY`) |
 | `SQLXML` | `Utf8` | `str` | Fallback via `getString()` |
 | `ROWID` | `Utf8` | `str` | Fallback |
 | `JSON` / `JSONB` / `UUID` / `XML` | `Utf8` | `str` | Detected from type name when reported as `OTHER` |
@@ -60,9 +60,9 @@ JayDeBeApiArrow converts JDBC data types through two stages: **JDBC to Arrow** (
 
 The `ExplicitTypeMapper` in `arrow-jdbc-extension.jar` inspects `ResultSetMetaData` to build a per-column type mapping. It handles driver-specific quirks:
 
-1. **Standard types** — JDBC type codes like `Types.INTEGER`, `Types.VARCHAR` are mapped directly
-2. **Unknown type codes** — Some drivers use non-standard codes (e.g., Oracle `BINARY_DOUBLE` = 101). The mapper falls back to matching the column type *name* against known patterns
-3. **Misreported types** — Some drivers misreport types (e.g., SQLite reports `TIME` as `VARCHAR`). The mapper detects these by comparing type code against type name
+1. **Standard types** - JDBC type codes like `Types.INTEGER`, `Types.VARCHAR` are mapped directly
+2. **Unknown type codes** - Some drivers use non-standard codes (e.g., Oracle `BINARY_DOUBLE` = 101). The mapper falls back to matching the column type *name* against known patterns
+3. **Misreported types** - Some drivers misreport types (e.g., SQLite reports `TIME` as `VARCHAR`). The mapper detects these by comparing type code against type name
 
 ## Known Limitations
 
@@ -70,11 +70,10 @@ The `ExplicitTypeMapper` in `arrow-jdbc-extension.jar` inspects `ResultSetMetaDa
 
 These types are **not natively supported** by the Arrow JDBC adapter. They are converted to `VARCHAR` as a degraded fallback:
 
-- **`ARRAY`** — Returned as `toString()` representation. No native Arrow array type support. Parameter binding for lists raises `NotSupportedError`.
-- **`SQLXML`** — Returned as string via `getString()`.
-- **`ROWID`** — Returned as string.
-- **`OTHER`** — Returned as string. Columns with type names containing `JSON`, `UUID`, or `XML` are auto-detected and mapped to `VARCHAR`.
-- **`TIME_WITH_TIMEZONE`** — Not natively supported. Falls back to string representation.
+- **`SQLXML`** - Returned as string via `getString()`.
+- **`ROWID`** - Returned as string.
+- **`OTHER`** - Returned as string. Columns with type names containing `JSON`, `UUID`, or `XML` are auto-detected and mapped to `VARCHAR`.
+- **`TIME_WITH_TIMEZONE`** - Not natively supported. Falls back to string representation.
 
 ### Driver-Specific Quirks
 
@@ -93,25 +92,25 @@ These types are **not natively supported** by the Arrow JDBC adapter. They are c
 
 - **TIMESTAMPTZ**: Reported as `Types.TIMESTAMP` by the PostgreSQL JDBC driver. Auto-detected by checking if the type name is `"timestamptz"` and overriding to `TIMESTAMP_WITH_TIMEZONE`.
 
-### Fork Constraint
-
-JPype does not support `fork()` after the JVM has started. This means:
-
-- Processes that fork after importing jaydebeapiarrow (e.g., gunicorn without `--preload`) will crash
-- The workaround is to use `gunicorn --preload` with lazy connections, or enable `experimental={'dynamic_classpath': True}`
-
 ### Parameter Binding
 
-| Python Type | Supported | Notes |
+| Python Type | JDBC Type | Example |
 |---|---|---|
-| `str`, `int`, `float`, `bool` | Yes | Standard JDBC types |
-| `decimal.Decimal` | Yes | Preserved as Java `BigDecimal` |
-| `datetime.datetime` | Yes | Converted to `java.sql.Timestamp` |
-| `datetime.date` | Yes | Converted to `java.sql.Date` |
-| `datetime.time` | Yes | Converted to `java.sql.Time` |
-| `bytes`, `bytearray` | Yes | Converted to Java `byte[]` |
-| `None` | Yes | Passed as SQL `NULL` |
-| `list` | No | Raises `NotSupportedError` |
+| `str` | `VARCHAR` | `"hello"` |
+| `int` | `INTEGER` | `42` |
+| `float` | `DOUBLE` | `3.14` |
+| `bool` | `BOOLEAN` | `True` |
+| `decimal.Decimal` | `DECIMAL` | `Decimal("10.50")` |
+| `datetime.datetime` | `TIMESTAMP` | `datetime(2024, 1, 15, 10, 30)` |
+| `datetime.date` | `DATE` | `date(2024, 1, 15)` |
+| `datetime.time` | `TIME` | `time(10, 30, 0)` |
+| `bytes` / `bytearray` | `BINARY` | `b"\x00\x01\x02"` |
+| `None` | `NULL` | `None` (uses `setNull()` internally) |
+| `list` | `ARRAY` | `[1, 2, 3]` converted to Java array |
+
+`None` parameters are handled via JDBC `setNull()` rather than `setObject(i, null)` for driver compatibility (e.g., Teradata rejects `setObject` with null).
+
+`list` parameters are converted to Java arrays (`int[]`, `String[]`, etc.) and bound via `setObject()`. The ARRAY column type is supported for both reading and writing with drivers that implement `java.sql.Array`.
 
 ## Comparison with Parent JayDeBeApi
 
@@ -123,5 +122,6 @@ JPype does not support `fork()` after the JVM has started. This means:
 | `DECIMAL` / `NUMERIC` | `float` / `int` | `decimal.Decimal` (full precision) |
 | `BINARY` | `str` | `bytes` / `memoryview` |
 | `TIMESTAMP_WITH_TIMEZONE` | Raw Java object | `datetime.datetime` (timezone-aware) |
+| `ARRAY` | Raw Java object | `list` (read and write) |
 
 See [Differences](differences.md) for the full list of changes from the parent project.
