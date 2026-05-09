@@ -1004,11 +1004,11 @@ class MockTest(unittest.TestCase):
 
     def test_no_deprecated_thread_attachment_api(self):
         """Verify that connect() does not use the deprecated
-        jpype.isThreadAttachedToJVM()."""
+        jpype.attachThreadToJVM()."""
         import inspect
         source = inspect.getsource(jaydebeapiarrow)
-        self.assertNotIn('isThreadAttachedToJVM', source,
-                         'Deprecated jpype.isThreadAttachedToJVM() must not be used')
+        self.assertNotIn('attachThreadToJVM', source,
+                         'Deprecated jpype.attachThreadToJVM() must not be used')
 
     def test_connect_no_deprecation_warnings(self):
         """Verify that connecting via the mock driver emits no
@@ -1240,8 +1240,8 @@ class ParallelConnectTest(unittest.TestCase):
             except Exception as e:
                 errors.append(e)
             finally:
-                if jpype.isThreadAttachedToJVM():
-                    jpype.detachThreadFromJVM()
+                if jpype.java.lang.Thread.isAttached():
+                    jpype.java.lang.Thread.detach()
 
         threads = []
         for i in range(5):

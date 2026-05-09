@@ -303,7 +303,7 @@ def _jdbc_connect_jpype(jclassname, url, driver_args, jars, libs, experimental=N
             if waited > 120:
                 raise RuntimeError("Timed out waiting for JVM to start")
     if not jpype.java.lang.Thread.isAttached():
-        jpype.attachThreadToJVM()
+        jpype.java.lang.Thread.attach()
         jpype.java.lang.Thread.currentThread().setContextClassLoader(jpype.java.lang.ClassLoader.getSystemClassLoader())
     try:
         import pyarrow.jvm
