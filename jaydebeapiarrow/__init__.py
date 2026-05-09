@@ -930,7 +930,7 @@ class Cursor(object):
 
     def fetchone(self):
         if not self._rs:
-            raise Error()
+            return None
 
         if self._buffer:
             return self._buffer.pop(0)
@@ -947,7 +947,7 @@ class Cursor(object):
 
     def fetchmany(self, size=None):
         if not self._rs:
-            raise Error()
+            return []
 
         if size is None:
             size = self.arraysize
@@ -974,7 +974,7 @@ class Cursor(object):
 
     def fetchall(self):
         if not self._rs:
-            raise Error()
+            return []
 
         result = []
         if self._buffer:

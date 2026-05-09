@@ -108,6 +108,19 @@ class DrillTest(IntegrationTestBase, unittest.TestCase):
         """Drill has no INSERT INTO ... VALUES — skip executemany test."""
         self.skipTest("Drill does not support INSERT INTO ... VALUES")
 
+    def test_fetchone_after_ddl_returns_none(self):
+        """Drill wraps SQL in SELECT — DDL must go through jconn.createStatement()."""
+        self.skipTest("Drill cannot execute DDL through prepared statements")
+
+    def test_fetchall_after_ddl_returns_empty(self):
+        self.skipTest("Drill cannot execute DDL through prepared statements")
+
+    def test_fetchmany_after_ddl_returns_empty(self):
+        self.skipTest("Drill cannot execute DDL through prepared statements")
+
+    def test_description_after_ddl_is_none(self):
+        self.skipTest("Drill cannot execute DDL through prepared statements")
+
     def test_execute_types(self):
         """Drill preserves DECIMAL scale; data seeded via CTAS, no INSERT."""
         with self.conn.cursor() as cursor:
