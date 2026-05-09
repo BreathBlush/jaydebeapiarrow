@@ -1,0 +1,55 @@
+name: Deploy docs
+
+on:
+  push:
+    branches:
+      - docs       # preview from docs branch
+      - master     # production from master
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages-${{ github.ref }}"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Build docs
+        run: uv run mkdocs build
+
+      - name: Configure preview path
+        if: github.ref == 'refs/heads/docs'
+        run: |
+          mkdir -p _site/preview
+          cp -a site/. _site/preview/
+          rm -rf site
+          mv _site site
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
