@@ -836,3 +836,7 @@ class SqliteTestBase(IntegrationTestBase):
     def setUpSql(self):
         self.sql_file(os.path.join(_THIS_DIR, 'data', 'create.sql'))
         self.sql_file(os.path.join(_THIS_DIR, 'data', 'insert.sql'))
+
+    def test_execute_param_datetime(self):
+        """SQLite JDBC does not support binding datetime.time parameters."""
+        self.skipTest("SQLite JDBC does not support datetime.time parameter binding")
