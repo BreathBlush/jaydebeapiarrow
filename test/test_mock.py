@@ -517,6 +517,33 @@ class MockTest(unittest.TestCase):
             except jaydebeapiarrow.InterfaceError as e:
                 self.assertIn("RuntimeException: expected", str(e))
 
+    def test_runtime_exception_on_execute_includes_cause_chain(self):
+        """RuntimeException with a nested cause should include the cause message."""
+        self.conn.jconn.mockExceptionOnExecuteWithCause(
+            "java.lang.RuntimeException",
+            "outer error",
+            "java.io.IOException",
+            "Connection reset by peer")
+        with self.conn.cursor() as cursor:
+            try:
+                cursor.execute("dummy stmt")
+                self.fail("expected exception")
+            except jaydebeapiarrow.InterfaceError as e:
+                msg = str(e)
+                self.assertIn("RuntimeException: outer error", msg)
+                self.assertIn("Connection reset by peer", msg)
+
+    def test_runtime_exception_on_execute_no_duplicate_classname(self):
+        """Error message should not contain duplicated Java class names."""
+        self.conn.jconn.mockExceptionOnExecute("java.lang.RuntimeException", "expected")
+        with self.conn.cursor() as cursor:
+            try:
+                cursor.execute("dummy stmt")
+                self.fail("expected exception")
+            except jaydebeapiarrow.InterfaceError as e:
+                msg = str(e)
+                self.assertNotIn("java.lang.java.lang", msg)
+
     def test_sql_exception_on_commit(self):
         self.conn.jconn.mockExceptionOnCommit("java.sql.SQLException", "expected")
         try:
@@ -1219,6 +1246,38 @@ class MockTest(unittest.TestCase):
     def test_lastrowid_none_after_executemany(self):
         """lastrowid should be None after executemany (mock driver limitation: skip)."""
         self.skipTest("Mock driver executeBatch returns None; covered by integration test")
+
+    # --- JDBC exception during fetch tests (legacy #58) ---
+
+    def test_sql_exception_on_fetch_raises_database_error(self):
+        """SQLException during fetch should raise DatabaseError, not raw Java exception.
+
+        Regression test for legacy issue baztian/jaydebeapi#58 where JDBC driver
+        exceptions (e.g., divide-by-zero in calculated columns) propagated as
+        raw Java exceptions through fetchone() instead of proper Python DatabaseError.
+        The Arrow JDBC library wraps SQLExceptions in JdbcConsumerException, so
+        the handler must walk the cause chain to find the original SQL error."""
+        self.conn.jconn.mockExceptionOnFetch("java.sql.SQLException", "Division by zero")
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            with self.assertRaises(jaydebeapiarrow.DatabaseError):
+                cursor.fetchone()
+
+    def test_runtime_exception_on_fetch_raises_interface_error(self):
+        """Non-SQL Java exceptions during fetch should raise InterfaceError."""
+        self.conn.jconn.mockExceptionOnFetch("java.lang.RuntimeException", "driver error")
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            with self.assertRaises(jaydebeapiarrow.InterfaceError):
+                cursor.fetchone()
+
+    def test_sql_exception_on_fetchall_raises_database_error(self):
+        """SQLException during fetchall should raise DatabaseError."""
+        self.conn.jconn.mockExceptionOnFetch("java.sql.SQLException", "Data conversion error")
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            with self.assertRaises(jaydebeapiarrow.DatabaseError):
+                cursor.fetchall()
 
 
 class ParallelConnectTest(unittest.TestCase):

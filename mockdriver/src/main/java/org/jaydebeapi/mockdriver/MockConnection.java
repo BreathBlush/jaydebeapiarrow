@@ -114,6 +114,22 @@ public abstract class MockConnection implements Connection {
     Mockito.when(this.prepareStatement(Mockito.any())).thenReturn(mockPreparedStatement);
   }
 
+  public final void mockExceptionOnExecuteWithCause(String className, String message,
+      String causeClassName, String causeMessage) throws SQLException {
+    PreparedStatement mockPreparedStatement = Mockito.mock(PreparedStatement.class);
+    Throwable cause = createException(causeClassName, causeMessage);
+    Throwable exception;
+    try {
+      exception = (Throwable) Class.forName(className)
+          .getConstructor(String.class, Throwable.class)
+          .newInstance(message, cause);
+    } catch (Exception e) {
+      throw new RuntimeException("Couldn't initialize class " + className + " with cause.", e);
+    }
+    Mockito.when(mockPreparedStatement.execute()).thenThrow(exception);
+    Mockito.when(this.prepareStatement(Mockito.any())).thenReturn(mockPreparedStatement);
+  }
+
   public final void mockBigDecimalResult(long value, int scale) throws SQLException {
     PreparedStatement mockPreparedStatement = Mockito.mock(PreparedStatement.class);
     Mockito.when(mockPreparedStatement.execute()).thenReturn(true);
@@ -443,6 +459,22 @@ public abstract class MockConnection implements Connection {
     Mockito.when(mockResultSet.getObject(1, LocalDateTime.class)).thenReturn(localDateTime);
     Mockito.when(mockResultSet.getTimestamp(1)).thenReturn(timestamp);
     Mockito.when(mockResultSet.getObject(1)).thenReturn(localDateTime);
+    Mockito.when(this.prepareStatement(Mockito.any())).thenReturn(mockPreparedStatement);
+  }
+
+  public final void mockExceptionOnFetch(String className, String exceptionMessage) throws SQLException {
+    PreparedStatement mockPreparedStatement = Mockito.mock(PreparedStatement.class);
+    Mockito.when(mockPreparedStatement.execute()).thenReturn(true);
+    mockResultSet = Mockito.mock(ResultSet.class, "ResultSet(for exception on fetch)");
+    Mockito.when(mockPreparedStatement.getResultSet()).thenReturn(mockResultSet);
+    Mockito.when(mockResultSet.next()).thenReturn(true);
+    ResultSetMetaData mockMetaData = Mockito.mock(ResultSetMetaData.class);
+    mockGeneralResultSetMetaData(mockMetaData, Types.DOUBLE);
+    Mockito.when(mockResultSet.getMetaData()).thenReturn(mockMetaData);
+
+    Throwable exception = createException(className, exceptionMessage);
+    Mockito.when(mockResultSet.getObject(1)).thenThrow(exception);
+    Mockito.when(mockResultSet.getDouble(1)).thenThrow(exception);
     Mockito.when(this.prepareStatement(Mockito.any())).thenReturn(mockPreparedStatement);
   }
 

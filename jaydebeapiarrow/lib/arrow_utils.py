@@ -5,6 +5,10 @@ from itertools import islice
 import pyarrow as pa
 from pyarrow.cffi import ffi as arrow_c
 
+# Set by __init__.py after JPype initialization.
+# Converts Java SQLException to Python DatabaseError.
+_handle_sql_exception = None
+
 
 def _import_batch_via_cdata(root):
     """Import a Java VectorSchemaRoot as a PyArrow RecordBatch via C Data Interface."""
@@ -41,6 +45,8 @@ def fetch_next_batch(it):
             decimal_message = _find_decimal_conversion_message(e)
             if decimal_message:
                 raise RuntimeError(decimal_message) from e
+            if _handle_sql_exception is not None:
+                _handle_sql_exception()
             raise
         try:
             batch = _import_batch_via_cdata(root).to_pylist()
@@ -94,6 +100,8 @@ def read_rows_from_arrow_iterator(it, nrows=-1):
                 root.clear()
 
     except Exception as e:
+        if _handle_sql_exception is not None:
+            _handle_sql_exception()
         traceback.print_exc()
         print(f"Error converting iterator to rows: {e}")
         raise e
