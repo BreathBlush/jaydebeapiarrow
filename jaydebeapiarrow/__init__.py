@@ -912,9 +912,9 @@ class Cursor(object):
             try:
                 gk_rs = self._prep.getGeneratedKeys()
                 if gk_rs.next():
-                    val = gk_rs.getObject(1)
-                    if isinstance(val, int):
-                        self.lastrowid = val
+                    self.lastrowid = int(gk_rs.getLong(1))
+                    if gk_rs.wasNull():
+                        self.lastrowid = None
             except Exception:
                 pass
         # self._prep.getWarnings() ???

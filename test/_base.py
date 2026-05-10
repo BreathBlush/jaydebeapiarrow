@@ -363,13 +363,23 @@ class IntegrationTestBase(object):
         auto-generated key when Statement.RETURN_GENERATED_KEYS was used.
         """
         with self.conn.cursor() as cursor:
+            try:
+                cursor.execute("DROP TABLE IF EXISTS LASTROWID_TEST")
+            except Exception:
+                try:
+                    cursor.execute("DROP TABLE LASTROWID_TEST")
+                except Exception:
+                    pass
             cursor.execute(self._autoincrement_create_sql())
             try:
                 cursor.execute("INSERT INTO LASTROWID_TEST (val) VALUES ('test')")
                 self.assertIsNotNone(cursor.lastrowid)
                 self.assertIsInstance(cursor.lastrowid, int)
             finally:
-                cursor.execute("DROP TABLE LASTROWID_TEST")
+                try:
+                    cursor.execute("DROP TABLE LASTROWID_TEST")
+                except Exception:
+                    pass
 
     def test_sql_exception_message_is_clean(self):
         """SQL exceptions should produce clean messages without JPype artefacts."""
