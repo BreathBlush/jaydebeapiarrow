@@ -175,15 +175,6 @@ df = curs.fetch_df()
 !!! note "Oracle limitation"
     Oracle JDBC returns ROWID instead of the numeric identity value via `getGeneratedKeys()`. For Oracle, `lastrowid` will always be `None`. Use `RETURNING INTO` for Oracle-specific identity retrieval.
 
-## Connection.close() is Idempotent
-
-Calling `close()` on an already-closed connection is a safe no-op, matching JDBC and standard Python DB-API behavior:
-
-```python
-conn.close()
-conn.close()  # no error
-```
-
 ## Parameter Binding
 
 ```python
