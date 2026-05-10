@@ -64,6 +64,9 @@ class SqlitePyTest(SqliteTestBase, unittest.TestCase):
     def test_rollback_with_autocommit_disabled(self):
         self.skipTest("pysqlite uses isolation_level, not JDBC setAutoCommit")
 
+    def test_sql_exception_message_is_clean(self):
+        self.skipTest("pysqlite raises sqlite3.OperationalError, not JDBC-wrapped DatabaseError")
+
     def test_lastrowid_none_after_select(self):
         self.skipTest("pysqlite returns actual rowid values, not None")
 
