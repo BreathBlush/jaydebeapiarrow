@@ -25,7 +25,9 @@ import java.util.TimeZone;
 import java.util.List;
 import java.util.logging.Logger;
 
+import org.apache.arrow.c.ArrowArray;
 import org.apache.arrow.c.ArrowArrayStream;
+import org.apache.arrow.c.ArrowSchema;
 import org.apache.arrow.c.Data;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.ipc.ArrowReader;
@@ -58,6 +60,19 @@ public class JDBCUtils {
     private static final Calendar utcCalendar = Calendar.getInstance(TimeZone.getTimeZone("UTC"));
 
     public JDBCUtils() {}
+
+    /**
+     * Export a VectorSchemaRoot as a single Arrow RecordBatch via the C Data Interface.
+     * Returns [arrayAddress, schemaAddress] — Python imports via pa.RecordBatch._import_from_c().
+     * Python takes ownership of the C data and will call the release callbacks.
+     */
+    public static long[] exportNextBatch(VectorSchemaRoot root) throws Exception {
+        BufferAllocator allocator = AllocatorSingleton.getChildAllocator();
+        ArrowArray arrowArray = ArrowArray.allocateNew(allocator);
+        ArrowSchema arrowSchema = ArrowSchema.allocateNew(allocator);
+        Data.exportVectorSchemaRoot(allocator, root, null, arrowArray, arrowSchema);
+        return new long[]{arrowArray.memoryAddress(), arrowSchema.memoryAddress()};
+    }
 
     public static void prepareStatementFromStream(long cStreamPointer, PreparedStatement statement, boolean isBatch) throws Exception {
         try (final ArrowArrayStream stream = ArrowArrayStream.wrap(cStreamPointer);
@@ -137,6 +152,7 @@ public class JDBCUtils {
 
     public static ArrowVectorIterator convertResultSetToIterator(ResultSet resultSet, int batchSize) throws Exception {
         BufferAllocator allocator = AllocatorSingleton.getChildAllocator();
+        ExplicitTypeMapper typeMapper = new ExplicitTypeMapper();
         OverriddenConsumer overriden_consumer = new OverriddenConsumer();
         JdbcToArrowConfig arrow_jdbc_config = (
             new JdbcToArrowConfigBuilder()
@@ -144,8 +160,8 @@ public class JDBCUtils {
             .setCalendar(utcCalendar)
             .setTargetBatchSize(batchSize)
             .setBigDecimalRoundingMode(RoundingMode.HALF_UP)
-            .setExplicitTypesByColumnIndex(new ExplicitTypeMapper().createExplicitTypeMapping(resultSet))
-            .setIncludeMetadata(true)
+            .setExplicitTypesByColumnIndex(typeMapper.createExplicitTypeMapping(resultSet))
+            .setArraySubTypeByColumnIndexMap(typeMapper.createArraySubTypeMapping(resultSet))
             .setJdbcToArrowTypeConverter((jdbcFieldInfo) -> overriden_consumer.getJdbcToArrowTypeConverter(jdbcFieldInfo))
             .setJdbcConsumerGetter(OverriddenConsumer::getConsumer)
             .build()

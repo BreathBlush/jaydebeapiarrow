@@ -120,57 +120,67 @@ In theory *every database with a suitable JDBC driver should work*. It is confir
 
 ## Testing
 
-Integration tests are located in `test/`. The test suite covers SQLite (in-memory), PostgreSQL, MySQL, and HSQLDB.
+Integration tests are located in `test/`. Tests run via [pytest](https://docs.pytest.org/) and cover all supported databases: SQLite (in-memory), HSQLDB, PostgreSQL, MySQL, MSSQL, Oracle, DB2, Trino, and Apache Drill.
 
 ### Build JARs and download drivers
 
 ```bash
 uv run bash test/build.sh                 # Build arrow-jdbc-extension and MockDriver JARs
-uv run bash test/download_jdbc_drivers.sh # Download PostgreSQL, MySQL, SQLite, HSQLDB JDBC drivers
+uv run bash test/download_jdbc_drivers.sh # Download JDBC drivers
 ```
 
 ### Run tests
 
 ```bash
-CLASSPATH="test/jars/*" uv run python -m unittest test.test_integration.HsqldbTest   # HSQLDB
-CLASSPATH="test/jars/*" uv run python -m unittest test.test_integration.SqliteXerialTest  # SQLite
-CLASSPATH="test/jars/*" uv run python -m unittest test.test_mock                       # Mock driver
+CLASSPATH="test/jars/*:test/mock-jars/*" uv run pytest test/test_mock.py test/test_infrastructure.py -v   # Mock + infrastructure
+CLASSPATH="test/jars/*" uv run pytest test/test_hsqldb.py -v                                                # HSQLDB
+CLASSPATH="test/jars/*" uv run pytest test/test_sqlite.py::SqliteXerialTest -v                              # SQLite JDBC
+CLASSPATH="test/jars/*" uv run pytest test/ -v --tb=short                                                  # All tests
 ```
+
+Pytest is configured in `pyproject.toml` to run tests in parallel across files using `pytest-xdist` with `--dist loadfile`.
 
 ### External database tests
 
-PostgreSQL and MySQL tests require running database instances. Docker Compose configs and helper scripts are provided in `test/`:
+Container-based databases are managed via Docker Compose:
 
 ```bash
-# Start both databases
-bash test/start.sh
+# Start all databases
+cd test && docker compose up -d
 
 # Check status
-bash test/status.sh
+cd test && docker compose ps
 
-# Stop databases
-bash test/stop.sh
+# Stop all databases
+cd test && docker compose down
 ```
 
 Database connection defaults (overridable via environment variables):
 
 | Database | Host | Port | DB | User | Password | Env prefix |
 |---|---|---|---|---|---|---|
-| PostgreSQL | localhost | 5432 | test_db | user | password | `JY_PG_*` |
-| MySQL | localhost | 3306 | test_db | user | password | `JY_MYSQL_*` |
+| PostgreSQL | localhost | 15432 | test_db | user | password | `JY_PG_*` |
+| MySQL | localhost | 13306 | test_db | user | password | `JY_MYSQL_*` |
+| MSSQL | localhost | 11433 | — | sa | Password123! | `JY_MSSQL_*` |
+| Oracle | localhost | 11521 | XEPDB1 | system | Password123! | `JY_ORACLE_*` |
+| DB2 | localhost | 15000 | test_db | db2inst1 | Password123! | `JY_DB2_*` |
+| Trino | localhost | 18080 | — | test | — | `JY_TRINO_*` |
+| Drill | localhost | 31010 | — | — | — | `JY_DRILL_*` |
 
 ## Benchmarks
 
 This approach was inspired by [Uwe Korn's work on pyarrow.jvm](https://uwekorn.com/2019/11/17/fast-jdbc-access-in-python-using-pyarrow-jvm.html) (Apache Drill) and [Razvi Noorul's Trino benchmarks](https://medium.com/@noorulrazvi/trino-jdbc-access-in-python-using-pyarrow-jvm-d1b75fe039ee), both demonstrating 100x+ speedups by using Arrow to bypass JPype's row-by-row serialization.
 
-Our benchmarks (local PostgreSQL, 5M rows, 4 columns) show a **~20x speedup** over plain jaydebeapi. The difference in multiplier is due to methodology: both posts tested against distributed query engines (Drill, Trino) over network connections, which have much higher per-row JDBC overhead. PostgreSQL's JDBC driver is significantly faster at row retrieval, so the baseline is lower and there's less headroom for a multiplier. The absolute Arrow throughput is comparable across all three.
+Our benchmarks (local PostgreSQL, 5M rows, 4 columns) show a **23.7x speedup** over plain jaydebeapi using the Native Arrow API. The difference in multiplier vs the referenced posts is due to methodology: they tested against distributed query engines (Drill, Trino) over network connections with higher per-row JDBC overhead. PostgreSQL's JDBC driver is fast at row retrieval, so the baseline is lower. The absolute Arrow throughput is comparable across all three.
+
+The reading path uses the Arrow **C Data Interface** (`Data.exportVectorSchemaRoot` → `pa.RecordBatch._import_from_c`), which bypasses `pyarrow.jvm` entirely. This brings the Native Arrow API to within **6% of psycopg2**, a native C driver.
 
 | Method | 5M rows | Throughput | vs jaydebeapi |
 |---|---|---|---|
-| jaydebeapi (baseline) | 198.66s | 25K rows/s | — |
-| Drop-in replacement | 25.82s | 194K rows/s | 7.7x |
-| Native Arrow API | 9.38s | 542K rows/s | **21.2x** |
-| Psycopg2 (native driver) | 7.34s | 682K rows/s | 27x |
+| jaydebeapi (baseline) | 180.1s | 28K rows/s | — |
+| Drop-in replacement | 26.5s | 189K rows/s | 6.8x |
+| Native Arrow API (C Data Interface) | 7.6s | 658K rows/s | **23.7x** |
+| Psycopg2 (native driver) | 7.2s | 694K rows/s | 25.0x |
 
 See `benchmark/` for scripts to reproduce these results.
 

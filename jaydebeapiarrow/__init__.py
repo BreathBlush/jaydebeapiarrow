@@ -32,6 +32,7 @@ import datetime
 from decimal import Decimal
 import glob
 import os
+import threading
 import time
 import sys
 import warnings
@@ -42,6 +43,25 @@ from jaydebeapiarrow.lib.arrow_utils import \
     create_pyarrow_batches_from_list, \
     add_pyarrow_batches_to_statement, \
     fetch_next_batch
+
+
+def _is_jvm_started():
+    """Check if the JPype JVM is started.
+
+    Defensive wrapper that prefers ``jpype.isJVMStarted()`` when available,
+    falling back to the internal ``_core._JVM_started`` flag if the public
+    attribute is missing (e.g. due to a broken/incomplete JPype install).
+
+    Note: ``jpype.isJVMStarted()`` has NOT been removed from any released
+    JPype version (confirmed present through v1.7.0).  The original upstream
+    report (baztian/jaydebeapi#253) was likely caused by a faulty
+    installation rather than an API removal.
+    """
+    import jpype
+    if hasattr(jpype, 'isJVMStarted'):
+        return jpype.isJVMStarted()
+    # Fallback for broken/incomplete JPype installs where the attribute is missing
+    return bool(getattr(getattr(jpype, '_core', None), '_JVM_started', False))
 
 
 def set_debug(enabled=True):
@@ -58,8 +78,7 @@ def set_debug(enabled=True):
     Args:
         enabled: True to enable debug logging, False to disable.
     """
-    import jpype
-    if not jpype.isJVMStarted():
+    if not _is_jvm_started():
         return
     Level = jpype.JClass("java.util.logging.Level")
     target_level = Level.FINE if enabled else Level.INFO
@@ -93,75 +112,243 @@ _handle_sql_exception = None
 
 old_jpype = False
 
+# Flag and lock to prevent race condition when multiple threads call
+# connect() simultaneously — without this, two threads can both see
+# isJVMStarted() return False and both attempt to start the JVM,
+# causing a crash.  The lock is only held briefly to check/set the
+# flag; startJVM() runs _outside_ the lock to avoid potential
+# deadlocks if JPype spawns threads during initialisation.
+_jvm_startup_lock = threading.Lock()
+_jvm_starting = False
+
+def _build_java_exception_message(exc):
+    """Build a clean error message from a Java exception, walking the cause
+    chain to surface wrapped exceptions. Avoids the duplicated class-name
+    artefact that JPype 1.7.0+ produces via ``str(exc)``."""
+    parts = []
+    current = exc
+    depth = 0
+    while current is not None and depth < 20:
+        cls_name = current.getClass().getName()
+        msg = str(current.getMessage()) if current.getMessage() else ""
+        parts.append(f"{cls_name}: {msg}" if msg else cls_name)
+        current = current.getCause()
+        depth += 1
+    return "\n  Caused by: ".join(parts)
+_jvm_started_pid = None
+
 def _handle_sql_exception_jpype():
     import jpype
     SQLException = jpype.java.sql.SQLException
     exc_info = sys.exc_info()
-    if old_jpype:
-        clazz = exc_info[1].__javaclass__
-        db_err = issubclass(clazz, SQLException)
-    else:
-        db_err = isinstance(exc_info[1], SQLException)
+    exc_val = exc_info[1]
+
+    # Check the exception and its cause chain for SQLException.
+    # The Arrow JDBC library wraps driver SQLExceptions in
+    # JdbcConsumerException, so we must walk the chain to find
+    # the original SQL error (e.g., divide-by-zero during fetch).
+    db_err = False
+    current = exc_val
+    while current is not None:
+        if old_jpype:
+            clazz = current.__javaclass__
+            if issubclass(clazz, SQLException):
+                db_err = True
+                break
+        else:
+            if isinstance(current, SQLException):
+                db_err = True
+                break
+        try:
+            current = current.getCause()
+        except AttributeError:
+            break
 
     if db_err:
         exc_type = DatabaseError
     else:
         exc_type = InterfaceError
-        
-    reraise(exc_type, exc_info[1], exc_info[2])
 
-def _jdbc_connect_jpype(jclassname, url, driver_args, jars, libs):
+    message = _build_java_exception_message(exc_val)
+    reraise(exc_type, message, exc_info[2])
+
+def _dynamic_load_driver(jclassname, jars):
+    """Load a JDBC driver from JARs after JVM start using the DriverShim pattern.
+
+    Java's DriverManager refuses to use drivers not loaded by the system
+    classloader.  This function works around that restriction by creating a
+    URLClassLoader for the new JARs, instantiating the driver through it, and
+    registering a ``DriverShim`` proxy (loaded on the system classloader) with
+    DriverManager.
+
+    Args:
+        jclassname: Fully-qualified Java class name of the JDBC driver.
+        jars: List of JAR file paths to load the driver from.
+
+    Returns:
+        The URLClassLoader used to load the driver.
+    """
     import jpype
-    if not jpype.isJVMStarted():
-        args = []
-        class_path = []
-        if jars:
-            class_path.extend(jars)
-        # print(_get_classpath())
-        class_path.extend(_get_classpath())
-        class_path.extend(_get_arrow_jar_paths())
-        class_path = list(set(class_path))
-        # print(class_path)
-        if class_path:
-            args.append('-Djava.class.path=%s' %
-                        os.path.pathsep.join(class_path))
-        if libs:
-            # path to shared libraries
-            libs_path = os.path.pathsep.join(libs)
-            args.append('-Djava.library.path=%s' % libs_path)
-        
-        # Add-opens for Apache Arrow on Java 9+
-        args.append('--add-opens=java.base/java.nio=ALL-UNNAMED')
 
-        # jvm_path = ('/usr/lib/jvm/java-6-openjdk'
-        #             '/jre/lib/i386/client/libjvm.so')
-        jvm_path = jpype.getDefaultJVMPath()
-        global old_jpype
-        if hasattr(jpype, '__version__'):
-            try:
-                ver_match = re.match(r'\d+\.\d+', jpype.__version__)
-                if ver_match:
-                    jpype_ver = float(ver_match.group(0))
-                    if jpype_ver < 0.7:
-                        old_jpype = True
-            except ValueError:
-                pass
-        if old_jpype:
-            jpype.startJVM(jvm_path, *args)
+    # Build URLClassLoader with the new JARs, parented to system classloader
+    urls = [jpype.java.io.File(j).toURI().toURL() for j in jars]
+    url_cl = jpype.java.net.URLClassLoader(
+        urls, jpype.java.lang.ClassLoader.getSystemClassLoader()
+    )
+
+    # Load driver class from custom classloader and instantiate
+    driver_cls = url_cl.loadClass(jclassname)
+    driver = driver_cls.getDeclaredConstructor().newInstance()
+
+    # Create a DriverShim proxy and register it with DriverManager.
+    # The shim is a Python-implemented java.sql.Driver that delegates
+    # every call to the real driver loaded via URLClassLoader.
+    # DriverManager accepts the shim because it is loaded by the system CL.
+
+    @jpype.JImplements("java.sql.Driver")
+    class DriverShim:
+        def __init__(self, _driver):
+            self._driver = _driver
+        @jpype.JOverride
+        def connect(self, u, info):
+            return self._driver.connect(u, info)
+        @jpype.JOverride
+        def acceptsURL(self, u):
+            return self._driver.acceptsURL(u)
+        @jpype.JOverride
+        def getPropertyInfo(self, u, info):
+            return self._driver.getPropertyInfo(u, info)
+        @jpype.JOverride
+        def getMajorVersion(self):
+            return self._driver.getMajorVersion()
+        @jpype.JOverride
+        def getMinorVersion(self):
+            return self._driver.getMinorVersion()
+        @jpype.JOverride
+        def jdbcCompliant(self):
+            return self._driver.jdbcCompliant()
+        @jpype.JOverride
+        def getParentLogger(self):
+            return self._driver.getParentLogger()
+
+    jpype.java.sql.DriverManager.registerDriver(DriverShim(driver))
+
+    # Update thread context classloader so the driver can find its own resources
+    jpype.java.lang.Thread.currentThread().setContextClassLoader(url_cl)
+
+    return url_cl
+
+
+def _jdbc_connect_jpype(jclassname, url, driver_args, jars, libs, jvm_args=None, experimental=None):
+    import jpype
+    global _jvm_starting, _jvm_started_pid
+
+    _experimental = experimental or {}
+
+    if _jvm_started_pid is not None and _jvm_started_pid != os.getpid():
+        if not _experimental.get('dynamic_classpath'):
+            raise InterfaceError(
+                "Cannot use jaydebeapiarrow in a forked process. "
+                "The JVM was started in the parent process (PID %d) but this is "
+                "PID %d. JPype does not support fork after JVM start. "
+                "Move the connect() call after the fork, or use a "
+                "post-fork-spawn worker model (e.g. gunicorn --preload with "
+                "lazy connections)." % (_jvm_started_pid, os.getpid())
+            )
+
+    # Brief lock: decide who starts the JVM (if needed).
+    with _jvm_startup_lock:
+        if _is_jvm_started():
+            should_start = False
+        elif _jvm_starting:
+            # Another thread is already starting the JVM; wait for it.
+            should_start = False
         else:
-            jpype.startJVM(jvm_path, *args, ignoreUnrecognized=True,
-                           convertStrings=True)
-    
+            _jvm_starting = True
+            should_start = True
+
+    if should_start:
+        try:
+            class_path = []
+            if jars:
+                class_path.extend(jars)
+            class_path.extend(_get_classpath())
+            class_path.extend(_get_arrow_jar_paths())
+            class_path = list(set(class_path))
+
+            args = []
+
+            if libs:
+                # path to shared libraries
+                libs_path = os.path.pathsep.join(libs)
+                args.append('-Djava.library.path=%s' % libs_path)
+
+            # Known issue: some JDBC drivers (notably IBM Db2) use the JVM's
+            # default charset for string conversion.  When the default is not
+            # UTF-8, non-ASCII characters (German umlauts, CJK, emoji) cause
+            # CharConversionException during result-set traversal.  Users who
+            # encounter this should pass jvm_args=['-Dfile.encoding=UTF-8']
+            # when calling connect().
+            # TODO: document this encoding requirement in user-facing docs
+            # and consider exposing a dedicated encoding parameter in connect().
+
+            # Add-opens for Apache Arrow on Java 9+
+            args.append('--add-opens=java.base/java.nio=ALL-UNNAMED')
+            # Drill's javassist needs reflective access to ClassLoader.defineClass
+            args.append('--add-opens=java.base/java.lang=ALL-UNNAMED')
+            # User-supplied extra JVM arguments (e.g. logging suppression)
+            args.extend(jvm_args or [])
+
+            # jvm_path = ('/usr/lib/jvm/java-6-openjdk'
+            #             '/jre/lib/i386/client/libjvm.so')
+            jvm_path = jpype.getDefaultJVMPath()
+            global old_jpype
+            if hasattr(jpype, '__version__'):
+                try:
+                    ver_match = re.match(r'\d+\.\d+', jpype.__version__)
+                    if ver_match:
+                        jpype_ver = float(ver_match.group(0))
+                        if jpype_ver < 0.7:
+                            old_jpype = True
+                except ValueError:
+                    pass
+            if old_jpype:
+                jpype.startJVM(jvm_path, *args,
+                               classpath=class_path)
+            else:
+                jpype.startJVM(jvm_path, *args, ignoreUnrecognized=True,
+                               convertStrings=True,
+                               classpath=class_path)
+            _jvm_started_pid = os.getpid()
+        finally:
+            with _jvm_startup_lock:
+                _jvm_starting = False
+    elif not _is_jvm_started():
+        # Another thread is starting the JVM; spin-wait until ready.
+        waited = 0
+        while not _is_jvm_started():
+            if not _jvm_starting:
+                # Startup thread failed; bail out so the caller sees the
+                # original exception (or retries on the next connect()).
+                break
+            time.sleep(0.05)
+            waited += 0.05
+            if waited > 120:
+                raise RuntimeError("Timed out waiting for JVM to start")
     if not jpype.java.lang.Thread.isAttached():
-        jpype.attachThreadToJVM()
+        jpype.java.lang.Thread.attach()
         jpype.java.lang.Thread.currentThread().setContextClassLoader(jpype.java.lang.ClassLoader.getSystemClassLoader())
     try:
         import pyarrow.jvm
     except ImportError as e:
         raise RuntimeError(f"Failed to import pyarrow.jvm ({e}). Looks like JVM is not started. Thisis required for jaydebeapiarrow to work.")
-    
+
     # register driver for DriverManager
-    jpype.JClass(jclassname)
+    if _experimental.get('dynamic_classpath') and jars and _is_jvm_started():
+        _dynamic_load_driver(jclassname, jars)
+    else:
+        jpype.JClass(jclassname)
+
     if isinstance(driver_args, dict):
         Properties = jpype.java.util.Properties
         info = Properties()
@@ -183,7 +370,38 @@ def _get_classpath():
     expanded_cp = []
     for i in orig_cp.split(os.path.pathsep):
         expanded_cp.extend(_jar_glob(i))
-    return expanded_cp
+    return _deduplicate_jars(expanded_cp)
+
+def _deduplicate_jars(jars):
+    """Keep only the newest JAR when duplicates (same basename) exist."""
+    import logging
+    # First pass: deduplicate by real path (same file found by different glob
+    # patterns, e.g. dir/*.jar and dir/**/*.jar).
+    by_realpath = {}
+    for jar in jars:
+        rp = os.path.realpath(jar)
+        if rp not in by_realpath:
+            by_realpath[rp] = jar
+    # Second pass: deduplicate by basename, keeping newest, warn on conflicts.
+    seen = {}
+    for jar in by_realpath.values():
+        name = os.path.basename(jar)
+        if name not in seen:
+            seen[name] = jar
+        else:
+            try:
+                if os.path.getmtime(jar) > os.path.getmtime(seen[name]):
+                    logging.getLogger(__name__).warning(
+                        "Duplicate JAR %s: keeping %s (newer) over %s",
+                        name, jar, seen[name])
+                    seen[name] = jar
+                else:
+                    logging.getLogger(__name__).warning(
+                        "Duplicate JAR %s: keeping %s (newer) over %s",
+                        name, seen[name], jar)
+            except OSError:
+                pass
+    return list(seen.values())
 
 def _jar_glob(item):
     if item.endswith('*'):
@@ -199,6 +417,8 @@ def _prepare_jpype():
     _jdbc_connect = _jdbc_connect_jpype
     global _handle_sql_exception
     _handle_sql_exception = _handle_sql_exception_jpype
+    from jaydebeapiarrow.lib import arrow_utils
+    arrow_utils._handle_sql_exception = _handle_sql_exception_jpype
 
 _prepare_jpype()
 
@@ -244,7 +464,7 @@ class DBAPITypeObject(object):
         global _jdbc_const_to_name
         if _jdbc_const_to_name is None:
             import jpype
-            if not jpype.isJVMStarted():
+            if not _is_jvm_started():
                 return None
             try:
                 Types = jpype.java.sql.Types
@@ -353,7 +573,7 @@ def TimestampFromTicks(ticks):
     return Timestamp(*time.localtime(ticks)[:6])
 
 # DB-API 2.0 Module Interface connect constructor
-def connect(jclassname, url, driver_args=None, jars=None, libs=None):
+def connect(jclassname, url, driver_args=None, jars=None, libs=None, jvm_args=None, experimental=None):
     """Open a connection to a database using a JDBC driver and return
     a Connection instance.
 
@@ -369,7 +589,24 @@ def connect(jclassname, url, driver_args=None, jars=None, libs=None):
     jars: Jar filename or sequence of filenames for the JDBC driver
     libs: Dll/so filenames or sequence of dlls/sos used as shared
           library by the JDBC driver
+    jvm_args: Optional list of extra JVM arguments passed to startJVM().
+          Only takes effect on the first connect() call (when the JVM
+          is started). Ignored on subsequent calls.
+    experimental: Optional dict of experimental feature flags.
+          Supported keys:
+            dynamic_classpath (bool): If True, allow loading JDBC drivers
+              from JARs after the JVM has already been started, using a
+              DriverShim proxy.  This also bypasses the fork-after-JVM-start
+              guard, making it suitable for gunicorn --preload workers.
     """
+    if not isinstance(url, str):
+        raise ProgrammingError(
+            "The 'url' parameter must be a JDBC connection string, "
+            "not %s. If you meant to pass connection credentials, "
+            "use the 'driver_args' parameter. "
+            "Usage: connect(jclassname, url, driver_args=None, jars=None, libs=None)"
+            % type(url).__name__
+        )
     if isinstance(driver_args, str):
         driver_args = [ driver_args ]
     if not driver_args:
@@ -384,7 +621,9 @@ def connect(jclassname, url, driver_args=None, jars=None, libs=None):
             libs = [ libs ]
     else:
         libs = []
-    jconn = _jdbc_connect(jclassname, url, driver_args, jars, libs)
+    if experimental is None:
+        experimental = {}
+    jconn = _jdbc_connect(jclassname, url, driver_args, jars, libs, jvm_args=jvm_args, experimental=experimental)
     return Connection(jconn, jclassname)
 
 # DB-API 2.0 Connection Object
@@ -411,17 +650,21 @@ class Connection(object):
 
     def close(self):
         if self._closed:
-            raise Error()
+            return
         self.jconn.close()
         self._closed = True
 
     def commit(self):
+        if self.jconn.getAutoCommit():
+            return
         try:
             self.jconn.commit()
         except:
             _handle_sql_exception()
 
     def rollback(self):
+        if self.jconn.getAutoCommit():
+            return
         try:
             self.jconn.rollback()
         except:
@@ -448,6 +691,8 @@ class Cursor(object):
         self._connection = connection
         self._buffer = []
         self._prep = None
+        self.rowcount = -1
+        self.lastrowid = None
 
     @property
     def connection(self):
@@ -470,7 +715,7 @@ class Cursor(object):
                     dbapi_type = None
                 else:
                     dbapi_type = DBAPITypeObject._map_jdbc_type_to_dbapi(jdbc_type)
-                col_desc = ( m.getColumnName(col),
+                col_desc = ( m.getColumnLabel(col),
                              dbapi_type,
                              size,
                              size,
@@ -541,6 +786,8 @@ class Cursor(object):
         support Arrow-stream parameter binding (e.g. Trino)."""
         import jpype
 
+        Types_NULL = jpype.java.sql.Types.NULL
+
         def _to_java(p):
             """Convert Python types to Java SQL types for setObject()."""
             if p is None:
@@ -551,29 +798,91 @@ class Cursor(object):
                 return jpype.JArray(jpype.JByte)(p)
             if isinstance(p, datetime.datetime):
                 return jpype.JClass("java.sql.Timestamp").valueOf(
-                    p.strftime("%Y-%m-%d %H:%M:%S"))
+                    p.strftime("%Y-%m-%d %H:%M:%S.%f"))
             if isinstance(p, datetime.date):
                 return jpype.JClass("java.sql.Date").valueOf(p.isoformat())
             if isinstance(p, datetime.time):
-                return jpype.JClass("java.sql.Time").valueOf(p.isoformat())
+                return jpype.JClass("java.sql.Time").valueOf(
+                    p.strftime("%H:%M:%S"))
             if isinstance(p, Decimal):
                 return jpype.JClass("java.math.BigDecimal")(str(p))
             if isinstance(p, list):
-                raise NotSupportedError(
-                    "ARRAY type parameter binding is not supported. "
-                    "Use server-side SQL functions to construct arrays, "
-                    "or cast to VARCHAR in your query."
-                )
+                return _list_to_java_array(p)
             return p
+
+        def _list_to_java_array(lst):
+            """Convert a Python list to a Java array for setArray() binding."""
+            if not lst:
+                return jpype.JArray(jpype.JString)(0)
+
+            # Infer element type from first non-None element
+            sample = None
+            for item in lst:
+                if item is not None:
+                    sample = item
+                    break
+
+            if sample is None:
+                return jpype.JArray(jpype.JString)([None] * len(lst))
+            if isinstance(sample, bool):
+                return jpype.JArray(jpype.JBoolean)(lst)
+            if isinstance(sample, int):
+                return jpype.JArray(jpype.JInt)(lst)
+            if isinstance(sample, float):
+                return jpype.JArray(jpype.JDouble)(lst)
+            if isinstance(sample, str):
+                return jpype.JArray(jpype.JString)(lst)
+            if isinstance(sample, Decimal):
+                return jpype.JArray(jpype.JString)([str(x) for x in lst])
+
+            return jpype.JArray(jpype.JString)([str(x) for x in lst])
+
+        def _bind_param(stmt, idx, p):
+            """Bind a parameter, using setArray for list values."""
+            if isinstance(p, list):
+                java_arr = _list_to_java_array(p)
+                try:
+                    conn = stmt.getConnection()
+                    sql_type = _infer_sql_type_name(java_arr)
+                    sql_array = conn.createArrayOf(sql_type, java_arr)
+                    stmt.setArray(idx, sql_array)
+                except Exception:
+                    stmt.setObject(idx, java_arr)
+            else:
+                stmt.setObject(idx, _to_java(p))
+
+        def _infer_sql_type_name(java_arr):
+            """Map a Java array class to its SQL type name for createArrayOf()."""
+            import jpype
+            cls = java_arr.getClass().getComponentType()
+            if cls == jpype.JBoolean:
+                return "BOOLEAN"
+            if cls == jpype.JInt:
+                return "INTEGER"
+            if cls == jpype.JDouble:
+                return "DOUBLE"
+            if cls == jpype.JString:
+                return "VARCHAR"
+            return "VARCHAR"
 
         if is_batch:
             for row in parameters:
                 for i, p in enumerate(row):
-                    statement.setObject(i + 1, _to_java(p))
+                    if p is None:
+                        statement.setNull(i + 1, Types_NULL)
+                    elif isinstance(p, list):
+                        _bind_param(statement, i + 1, p)
+                    else:
+                        statement.setObject(i + 1, _to_java(p))
                 statement.addBatch()
         else:
             for i, p in enumerate(parameters):
-                statement.setObject(i + 1, _to_java(p))
+                if p is None:
+                    statement.setNull(i + 1, Types_NULL)
+                elif isinstance(p, list):
+                    _bind_param(statement, i + 1, p)
+                else:
+                    statement.setObject(i + 1, _to_java(p))
 
     def execute(self, operation, parameters=None):
         if self._connection._closed:
@@ -581,7 +890,14 @@ class Cursor(object):
         if not parameters:
             parameters = ()
         self._close_last()
-        self._prep = self._connection.jconn.prepareStatement(operation)
+        self.lastrowid = None
+        try:
+            self._prep = self._connection.jconn.prepareStatement(operation, 1)
+        except Exception:
+            try:
+                self._prep = self._connection.jconn.prepareStatement(operation)
+            except:
+                _handle_sql_exception()
         self._set_stmt_parms(self._prep, parameters, is_batch=False)
         try:
             is_rs = self._prep.execute()
@@ -593,13 +909,31 @@ class Cursor(object):
             self.rowcount = -1
         else:
             self.rowcount = self._prep.getUpdateCount()
+            try:
+                gk_rs = self._prep.getGeneratedKeys()
+                if gk_rs.next():
+                    self.lastrowid = int(gk_rs.getLong(1))
+                    if gk_rs.wasNull():
+                        self.lastrowid = None
+            except Exception:
+                pass
         # self._prep.getWarnings() ???
 
     def executemany(self, operation, seq_of_parameters):
         self._close_last()
-        self._prep = self._connection.jconn.prepareStatement(operation)
+        self.lastrowid = None
+        try:
+            self._prep = self._connection.jconn.prepareStatement(operation, 1)
+        except Exception:
+            try:
+                self._prep = self._connection.jconn.prepareStatement(operation)
+            except:
+                _handle_sql_exception()
         self._set_stmt_parms(self._prep, seq_of_parameters, is_batch=True)
-        update_counts = self._prep.executeBatch()
+        try:
+            update_counts = self._prep.executeBatch()
+        except:
+            _handle_sql_exception()
         # self._prep.getWarnings() ???
         self.rowcount = sum(update_counts)
         self._close_last()
@@ -619,7 +953,7 @@ class Cursor(object):
 
     def fetchone(self):
         if not self._rs:
-            raise Error()
+            return None
 
         if self._buffer:
             return self._buffer.pop(0)
@@ -630,17 +964,19 @@ class Cursor(object):
             self._buffer.extend(rows)
             return self._buffer.pop(0)
 
+        # Iterator exhausted and closed by fetch_next_batch
+        self._iter = None
         return None
 
     def fetchmany(self, size=None):
         if not self._rs:
-            raise Error()
-        
+            return []
+
         if size is None:
             size = self.arraysize
-        
+
         assert size > 0, f"Fetchmany expects positive size other than size={size}."
-        
+
         result = []
         while len(result) < size:
             if self._buffer:
@@ -652,22 +988,24 @@ class Cursor(object):
                 it = self._get_iter()
                 rows = fetch_next_batch(it)
                 if not rows:
+                    # Iterator exhausted and closed by fetch_next_batch
+                    self._iter = None
                     break
                 self._buffer.extend(rows)
-        
+
         return result
 
     def fetchall(self):
         if not self._rs:
-            raise Error()
-        
+            return []
+
         result = []
         if self._buffer:
             result.extend(self._buffer)
             self._buffer = []
-            
+
         it = self._get_iter()
-        
+
         # We can implement a more efficient fetchall if we want to avoid python loops for buffering,
         # but reusing fetch_next_batch is simpler.
         while True:
@@ -675,7 +1013,9 @@ class Cursor(object):
             if not rows:
                 break
             result.extend(rows)
-            
+
+        # Iterator exhausted and closed by fetch_next_batch
+        self._iter = None
         return result
 
     # optional nextset() unsupported
@@ -714,12 +1054,20 @@ class Cursor(object):
         import pyarrow as pa
         it = self._get_iter()
 
-        while it.hasNext():
-            root = it.next()
+        try:
+            while it.hasNext():
+                root = it.next()
+                try:
+                    yield pa.jvm.record_batch(root)
+                finally:
+                    root.clear()
+        finally:
+            # Close iterator to release Arrow allocator and JDBC resources
+            self._iter = None
             try:
-                yield pa.jvm.record_batch(root)
-            finally:
-                root.clear()
+                it.close()
+            except Exception:
+                pass
 
     def fetch_arrow_table(self):
         """
@@ -755,6 +1103,13 @@ class Cursor(object):
         Returns:
             pandas.DataFrame: Query result as a pandas DataFrame
         """
+        try:
+            import pandas  # noqa: F401
+        except ImportError:
+            raise ImportError(
+                "fetch_df() requires pandas. "
+                "Install it with: pip install jaydebeapiarrow[pandas]"
+            )
         return self.fetch_arrow_table().to_pandas()
 
     def __enter__(self):

@@ -5,6 +5,22 @@ from itertools import islice
 import pyarrow as pa
 from pyarrow.cffi import ffi as arrow_c
 
+# Set by __init__.py after JPype initialization.
+# Converts Java SQLException to Python DatabaseError.
+_handle_sql_exception = None
+
+
+def _import_batch_via_cdata(root):
+    """Import a Java VectorSchemaRoot as a PyArrow RecordBatch via C Data Interface."""
+    import jpype.imports
+    from org.jaydebeapiarrow.extension import JDBCUtils
+
+    addresses = JDBCUtils.exportNextBatch(root)
+    array_ptr = int(addresses[0])
+    schema_ptr = int(addresses[1])
+
+    return pa.RecordBatch._import_from_c(array_ptr, schema_ptr)
+
 
 def convert_jdbc_rs_to_arrow_iterator(rs, batch_size=1024):
     import jpype.imports
@@ -18,6 +34,9 @@ def fetch_next_batch(it):
     Fetches the next batch from the ArrowVectorIterator 'it'.
     Returns a list of rows (tuples).
     Returns empty list if iterator is exhausted.
+
+    When the iterator is exhausted, it is automatically closed to release
+    the Arrow allocator and JDBC resources.
     """
     if it.hasNext():
         try:
@@ -26,13 +45,21 @@ def fetch_next_batch(it):
             decimal_message = _find_decimal_conversion_message(e)
             if decimal_message:
                 raise RuntimeError(decimal_message) from e
+            if _handle_sql_exception is not None:
+                _handle_sql_exception()
             raise
         try:
-            batch = pa.jvm.record_batch(root).to_pylist()
+            batch = _import_batch_via_cdata(root).to_pylist()
             rows = [tuple(r.values()) for r in batch]
             return rows
         finally:
             root.clear()
+    else:
+        # Iterator exhausted — close to release Arrow allocator and JDBC resources
+        try:
+            it.close()
+        except Exception:
+            pass
     return []
 
 
@@ -51,7 +78,6 @@ def _find_decimal_conversion_message(exc):
 
 
 def read_rows_from_arrow_iterator(it, nrows=-1):
-    root = None
     rows = []
 
     nrows_remaining = nrows
@@ -60,25 +86,33 @@ def read_rows_from_arrow_iterator(it, nrows=-1):
         for root in it:
             if root is None:
                 break
-            batch = pa.jvm.record_batch(root).to_pylist()
-            _rows = [tuple(r.values()) for r in batch]
-            if nrows_remaining > 0:
-                _rows = _rows[:min(len(_rows), nrows_remaining)]
-                nrows_remaining -= len(_rows)
-            else:
-                if nrows > 0:
-                    break
-            rows.extend(_rows)
-    
+            try:
+                batch = _import_batch_via_cdata(root).to_pylist()
+                _rows = [tuple(r.values()) for r in batch]
+                if nrows_remaining > 0:
+                    _rows = _rows[:min(len(_rows), nrows_remaining)]
+                    nrows_remaining -= len(_rows)
+                else:
+                    if nrows > 0:
+                        break
+                rows.extend(_rows)
+            finally:
+                root.clear()
+
     except Exception as e:
+        if _handle_sql_exception is not None:
+            _handle_sql_exception()
         traceback.print_exc()
         print(f"Error converting iterator to rows: {e}")
         raise e
-    
+
     finally:
-        if root is not None:
-            root.clear()
-    
+        # Close iterator to release Arrow allocator and JDBC resources
+        try:
+            it.close()
+        except Exception:
+            pass
+
     if nrows > 0:
         assert nrows >= len(rows), f"Mismatched number rows: {len(rows)} (expected {nrows})"
     return rows

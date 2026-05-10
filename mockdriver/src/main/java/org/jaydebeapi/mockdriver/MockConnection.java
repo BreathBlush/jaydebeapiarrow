@@ -60,6 +60,24 @@ public abstract class MockConnection implements Connection {
     Mockito.when(mockMetaData.isWritable(column)).thenReturn(true);
   }
 
+  public final void mockStringResult(String value) throws SQLException {
+    PreparedStatement mockPreparedStatement = Mockito.mock(PreparedStatement.class);
+    Mockito.when(mockPreparedStatement.execute()).thenReturn(true);
+    mockResultSet = Mockito.mock(ResultSet.class, "ResultSet(for string)");
+    Mockito.when(mockPreparedStatement.getResultSet()).thenReturn(mockResultSet);
+    Mockito.when(mockResultSet.next()).thenReturn(true);
+    ResultSetMetaData mockMetaData = Mockito.mock(ResultSetMetaData.class);
+    mockGeneralResultSetMetaData(mockMetaData, Types.VARCHAR);
+    Mockito.when(mockResultSet.getMetaData()).thenReturn(mockMetaData);
+    Mockito.when(mockResultSet.getObject(1)).thenReturn(value);
+    Mockito.when(mockResultSet.getString(1)).thenReturn(value);
+    stubPrepareStatement(mockPreparedStatement);
+  }
+
+  public final void mockAutoCommit(boolean autoCommit) throws SQLException {
+    Mockito.doReturn(autoCommit).when(this).getAutoCommit();
+  }
+
   public final void mockExceptionOnCommit(String className, String exceptionMessage)
       throws SQLException {
     Throwable exception = createException(className, exceptionMessage);
@@ -77,7 +95,39 @@ public abstract class MockConnection implements Connection {
     PreparedStatement mockPreparedStatement = Mockito.mock(PreparedStatement.class);
     Throwable exception = createException(className, exceptionMessage);
     Mockito.when(mockPreparedStatement.execute()).thenThrow(exception);
-    Mockito.when(this.prepareStatement(Mockito.any())).thenReturn(mockPreparedStatement);
+    stubPrepareStatement(mockPreparedStatement);
+  }
+
+  public final void mockBinaryResult(byte[] value) throws SQLException {
+    PreparedStatement mockPreparedStatement = Mockito.mock(PreparedStatement.class);
+    Mockito.when(mockPreparedStatement.execute()).thenReturn(true);
+    mockResultSet = Mockito.mock(ResultSet.class, "ResultSet(for binary)");
+    Mockito.when(mockPreparedStatement.getResultSet()).thenReturn(mockResultSet);
+    Mockito.when(mockResultSet.next()).thenReturn(true);
+    ResultSetMetaData mockMetaData = Mockito.mock(ResultSetMetaData.class);
+    mockGeneralResultSetMetaData(mockMetaData, Types.VARBINARY);
+    Mockito.when(mockResultSet.getBytes(1)).thenReturn(value);
+    Mockito.when(mockResultSet.getObject(1)).thenReturn(value);
+    Mockito.when(mockResultSet.wasNull()).thenReturn(false);
+    Mockito.when(mockResultSet.getBinaryStream(1)).thenReturn(new java.io.ByteArrayInputStream(value));
+    Mockito.when(mockResultSet.getMetaData()).thenReturn(mockMetaData);
+    stubPrepareStatement(mockPreparedStatement);
+  }
+
+  public final void mockExceptionOnExecuteWithCause(String className, String message,
+      String causeClassName, String causeMessage) throws SQLException {
+    PreparedStatement mockPreparedStatement = Mockito.mock(PreparedStatement.class);
+    Throwable cause = createException(causeClassName, causeMessage);
+    Throwable exception;
+    try {
+      exception = (Throwable) Class.forName(className)
+          .getConstructor(String.class, Throwable.class)
+          .newInstance(message, cause);
+    } catch (Exception e) {
+      throw new RuntimeException("Couldn't initialize class " + className + " with cause.", e);
+    }
+    Mockito.when(mockPreparedStatement.execute()).thenThrow(exception);
+    stubPrepareStatement(mockPreparedStatement);
   }
 
   public final void mockBigDecimalResult(long value, int scale) throws SQLException {
@@ -95,7 +145,7 @@ public abstract class MockConnection implements Connection {
     BigDecimal columnValue = BigDecimal.valueOf(value, scale);
     Mockito.when(mockResultSet.getObject(1)).thenReturn(columnValue);
     Mockito.when(mockResultSet.getBigDecimal(1)).thenReturn(columnValue);
-    Mockito.when(this.prepareStatement(Mockito.any())).thenReturn(mockPreparedStatement);
+    stubPrepareStatement(mockPreparedStatement);
   }
 
   public final void mockNullDecimalResult(int precision, int scale) throws SQLException {
@@ -112,7 +162,7 @@ public abstract class MockConnection implements Connection {
 
     Mockito.when(mockResultSet.getObject(1)).thenReturn(null);
     Mockito.when(mockResultSet.wasNull()).thenReturn(true);
-    Mockito.when(this.prepareStatement(Mockito.any())).thenReturn(mockPreparedStatement);
+    stubPrepareStatement(mockPreparedStatement);
   }
 
   public final void mockHighPrecisionDecimalResult(BigDecimal value, int precision, int scale) throws SQLException {
@@ -129,7 +179,7 @@ public abstract class MockConnection implements Connection {
 
     Mockito.when(mockResultSet.getObject(1)).thenReturn(value);
     Mockito.when(mockResultSet.wasNull()).thenReturn(false);
-    Mockito.when(this.prepareStatement(Mockito.any())).thenReturn(mockPreparedStatement);
+    stubPrepareStatement(mockPreparedStatement);
   }
 
   public final void mockIntegerDecimalResult(long value, int precision, int scale) throws SQLException {
@@ -150,7 +200,7 @@ public abstract class MockConnection implements Connection {
     BigDecimal bdValue = BigDecimal.valueOf(value);
     Mockito.when(mockResultSet.getObject(1)).thenReturn(bdValue);
     Mockito.when(mockResultSet.wasNull()).thenReturn(false);
-    Mockito.when(this.prepareStatement(Mockito.any())).thenReturn(mockPreparedStatement);
+    stubPrepareStatement(mockPreparedStatement);
   }
 
   public final void mockNullNumericResult(int precision, int scale) throws SQLException {
@@ -167,7 +217,7 @@ public abstract class MockConnection implements Connection {
 
     Mockito.when(mockResultSet.getObject(1)).thenReturn(null);
     Mockito.when(mockResultSet.wasNull()).thenReturn(true);
-    Mockito.when(this.prepareStatement(Mockito.any())).thenReturn(mockPreparedStatement);
+    stubPrepareStatement(mockPreparedStatement);
   }
 
   public final void mockNumericTypeResult(BigDecimal value, int precision, int scale) throws SQLException {
@@ -184,7 +234,7 @@ public abstract class MockConnection implements Connection {
 
     Mockito.when(mockResultSet.getObject(1)).thenReturn(value);
     Mockito.when(mockResultSet.wasNull()).thenReturn(false);
-    Mockito.when(this.prepareStatement(Mockito.any())).thenReturn(mockPreparedStatement);
+    stubPrepareStatement(mockPreparedStatement);
   }
 
   public final void mockDoubleDecimalResult(double value) throws SQLException {
@@ -202,7 +252,37 @@ public abstract class MockConnection implements Connection {
     Double columnValue = Double.valueOf(value);
     Mockito.when(mockResultSet.getObject(1)).thenReturn(value);
     Mockito.when(mockResultSet.getBigDecimal(1)).thenReturn(BigDecimal.valueOf(value));
-    Mockito.when(this.prepareStatement(Mockito.any())).thenReturn(mockPreparedStatement);
+    stubPrepareStatement(mockPreparedStatement);
+  }
+
+  public final void mockBigIntResult(long value) throws SQLException {
+    PreparedStatement mockPreparedStatement = Mockito.mock(PreparedStatement.class);
+    Mockito.when(mockPreparedStatement.execute()).thenReturn(true);
+    mockResultSet = Mockito.mock(ResultSet.class, "ResultSet(for bigint)");
+    Mockito.when(mockPreparedStatement.getResultSet()).thenReturn(mockResultSet);
+    Mockito.when(mockResultSet.next()).thenReturn(true);
+    ResultSetMetaData mockMetaData = Mockito.mock(ResultSetMetaData.class);
+    mockGeneralResultSetMetaData(mockMetaData, Types.BIGINT);
+    Mockito.when(mockResultSet.getMetaData()).thenReturn(mockMetaData);
+
+    Mockito.when(mockResultSet.getObject(1)).thenReturn(Long.valueOf(value));
+    Mockito.when(mockResultSet.getLong(1)).thenReturn(value);
+    stubPrepareStatement(mockPreparedStatement);
+  }
+
+  public final void mockDoubleResult(double value) throws SQLException {
+    PreparedStatement mockPreparedStatement = Mockito.mock(PreparedStatement.class);
+    Mockito.when(mockPreparedStatement.execute()).thenReturn(true);
+    mockResultSet = Mockito.mock(ResultSet.class, "ResultSet(for double)");
+    Mockito.when(mockPreparedStatement.getResultSet()).thenReturn(mockResultSet);
+    Mockito.when(mockResultSet.next()).thenReturn(true);
+    ResultSetMetaData mockMetaData = Mockito.mock(ResultSetMetaData.class);
+    mockGeneralResultSetMetaData(mockMetaData, Types.DOUBLE);
+    Mockito.when(mockResultSet.getMetaData()).thenReturn(mockMetaData);
+
+    Mockito.when(mockResultSet.getObject(1)).thenReturn(Double.valueOf(value));
+    Mockito.when(mockResultSet.getDouble(1)).thenReturn(value);
+    stubPrepareStatement(mockPreparedStatement);
   }
 
   public final void mockDateResult(int year, int month, int day) throws SQLException {
@@ -223,7 +303,7 @@ public abstract class MockConnection implements Connection {
     LocalDate ancientLocalDate = LocalDate.of(year, month, day);
     Mockito.when(mockResultSet.getDate(1)).thenReturn(ancientDate);
     Mockito.when(mockResultSet.getObject(1, LocalDate.class)).thenReturn(ancientLocalDate);
-    Mockito.when(this.prepareStatement(Mockito.any())).thenReturn(mockPreparedStatement);
+    stubPrepareStatement(mockPreparedStatement);
   }
 
   public final void mockType(String sqlTypesName) throws SQLException {
@@ -244,6 +324,7 @@ public abstract class MockConnection implements Connection {
       case Types.CLOB:
       case Types.LONGVARCHAR:
       case Types.LONGNVARCHAR:
+      case Types.SQLXML:
         object = "DummyString";
         Mockito.when(mockResultSet.getString(1)).thenReturn((String) object);
         break;
@@ -301,18 +382,26 @@ public abstract class MockConnection implements Connection {
     }
     Mockito.when(mockResultSet.getObject(1)).thenReturn(object);
     Mockito.when(mockResultSet.getMetaData()).thenReturn(mockMetaData);
-    Mockito.when(this.prepareStatement(Mockito.any())).thenReturn(mockPreparedStatement);
+    stubPrepareStatement(mockPreparedStatement);
   }
 
   private List<Object[]> capturedSetObjectArgs;
+  private List<Object[]> capturedSetNullArgs;
 
-  /** Set up a PreparedStatement that captures all setObject() calls.
+  /** Set up a PreparedStatement that captures all setObject() and setNull() calls.
    *  Rejects Arrow-stream binding to force the _set_stmt_parms_fallback path. */
   public final void mockSetObjectCapture() throws SQLException {
     capturedSetObjectArgs = new ArrayList<>();
-    // Throw by default so Arrow primary path fails and fallback is triggered
+    capturedSetNullArgs = new ArrayList<>();
+    // Throw by default so Arrow primary path fails and fallback is triggered,
+    // but allow setNull() through (needed for NULL parameter binding tests).
     PreparedStatement mockPreparedStatement = Mockito.mock(PreparedStatement.class,
-        invocation -> { throw new UnsupportedOperationException("mockSetObjectCapture"); });
+        invocation -> {
+          if ("setNull".equals(invocation.getMethod().getName())) {
+            return null;
+          }
+          throw new UnsupportedOperationException("mockSetObjectCapture");
+        });
     Mockito.doReturn(true).when(mockPreparedStatement).execute();
     Mockito.doNothing().when(mockPreparedStatement).close();
     mockResultSet = Mockito.mock(ResultSet.class, "ResultSet(for setObject capture)");
@@ -325,14 +414,135 @@ public abstract class MockConnection implements Connection {
       capturedSetObjectArgs.add(new Object[]{invocation.getArgument(0), invocation.getArgument(1)});
       return null;
     }).when(mockPreparedStatement).setObject(Mockito.anyInt(), Mockito.any());
+    Mockito.doAnswer(invocation -> {
+      capturedSetNullArgs.add(new Object[]{invocation.getArgument(0), invocation.getArgument(1)});
+      return null;
+    }).when(mockPreparedStatement).setNull(Mockito.anyInt(), Mockito.anyInt());
     Mockito.doReturn(mockPreparedStatement).when(this).prepareStatement(Mockito.any());
+    Mockito.doReturn(mockPreparedStatement).when(this).prepareStatement(Mockito.any(), Mockito.anyInt());
+  }
+
+  public final void mockColumnAlias(String columnName, String columnLabel) throws SQLException {
+    PreparedStatement mockPreparedStatement = Mockito.mock(PreparedStatement.class);
+    Mockito.when(mockPreparedStatement.execute()).thenReturn(true);
+    mockResultSet = Mockito.mock(ResultSet.class, "ResultSet(for column alias)");
+    Mockito.when(mockPreparedStatement.getResultSet()).thenReturn(mockResultSet);
+    Mockito.when(mockResultSet.next()).thenReturn(true);
+    ResultSetMetaData mockMetaData = Mockito.mock(ResultSetMetaData.class);
+    mockGeneralResultSetMetaData(mockMetaData, Types.VARCHAR);
+    // Override with different column name and label
+    Mockito.when(mockMetaData.getColumnName(1)).thenReturn(columnName);
+    Mockito.when(mockMetaData.getColumnLabel(1)).thenReturn(columnLabel);
+    Mockito.when(mockResultSet.getObject(1)).thenReturn("DummyString");
+    Mockito.when(mockResultSet.getMetaData()).thenReturn(mockMetaData);
+    stubPrepareStatement(mockPreparedStatement);
   }
 
   public final List<Object[]> getCapturedSetObjectArgs() {
     return capturedSetObjectArgs;
   }
 
+  public final List<Object[]> getCapturedSetNullArgs() {
+    return capturedSetNullArgs;
+  }
+
+
+  public final void mockTimestampResult(LocalDateTime localDateTime) throws SQLException {
+    PreparedStatement mockPreparedStatement = Mockito.mock(PreparedStatement.class);
+    Mockito.when(mockPreparedStatement.execute()).thenReturn(true);
+    mockResultSet = Mockito.mock(ResultSet.class, "ResultSet(for timestamp)");
+    Mockito.when(mockPreparedStatement.getResultSet()).thenReturn(mockResultSet);
+    Mockito.when(mockResultSet.next()).thenReturn(true);
+    ResultSetMetaData mockMetaData = Mockito.mock(ResultSetMetaData.class);
+    mockGeneralResultSetMetaData(mockMetaData, Types.TIMESTAMP);
+    Mockito.when(mockResultSet.getMetaData()).thenReturn(mockMetaData);
+    Timestamp timestamp = Timestamp.valueOf(localDateTime);
+    Mockito.when(mockResultSet.getObject(1, LocalDateTime.class)).thenReturn(localDateTime);
+    Mockito.when(mockResultSet.getTimestamp(1)).thenReturn(timestamp);
+    Mockito.when(mockResultSet.getObject(1)).thenReturn(localDateTime);
+    stubPrepareStatement(mockPreparedStatement);
+  }
+
+  public final void mockExceptionOnFetch(String className, String exceptionMessage) throws SQLException {
+    PreparedStatement mockPreparedStatement = Mockito.mock(PreparedStatement.class);
+    Mockito.when(mockPreparedStatement.execute()).thenReturn(true);
+    mockResultSet = Mockito.mock(ResultSet.class, "ResultSet(for exception on fetch)");
+    Mockito.when(mockPreparedStatement.getResultSet()).thenReturn(mockResultSet);
+    Mockito.when(mockResultSet.next()).thenReturn(true);
+    ResultSetMetaData mockMetaData = Mockito.mock(ResultSetMetaData.class);
+    mockGeneralResultSetMetaData(mockMetaData, Types.DOUBLE);
+    Mockito.when(mockResultSet.getMetaData()).thenReturn(mockMetaData);
+
+    Throwable exception = createException(className, exceptionMessage);
+    Mockito.when(mockResultSet.getObject(1)).thenThrow(exception);
+    Mockito.when(mockResultSet.getDouble(1)).thenThrow(exception);
+    stubPrepareStatement(mockPreparedStatement);
+  }
+
   public final ResultSet verifyResultSet() {
     return Mockito.verify(mockResultSet);
+  }
+
+  /** Stub both prepareStatement overloads (single-arg and two-arg with autoGeneratedKeys). */
+  private void stubPrepareStatement(PreparedStatement ps) throws SQLException {
+    Mockito.when(this.prepareStatement(Mockito.any())).thenReturn(ps);
+    Mockito.when(this.prepareStatement(Mockito.any(), Mockito.anyInt())).thenReturn(ps);
+  }
+
+  /** Set up a multi-column mock result for testing mixed-type queries.
+   *  @param sqlTypes  JDBC type codes for each column
+   *  @param values    Java objects to return for each column (via getObject)
+   */
+  public final void mockMultiColumnResult(int[] sqlTypes, Object[] values) throws SQLException {
+    PreparedStatement mockPreparedStatement = Mockito.mock(PreparedStatement.class);
+    Mockito.when(mockPreparedStatement.execute()).thenReturn(true);
+    mockResultSet = Mockito.mock(ResultSet.class, "ResultSet(multi-column)");
+    Mockito.when(mockPreparedStatement.getResultSet()).thenReturn(mockResultSet);
+    Mockito.when(mockResultSet.next()).thenReturn(true);
+
+    ResultSetMetaData mockMetaData = Mockito.mock(ResultSetMetaData.class);
+    int colCount = sqlTypes.length;
+    Mockito.when(mockMetaData.getColumnCount()).thenReturn(colCount);
+    for (int i = 0; i < colCount; i++) {
+      int col = i + 1; // JDBC is 1-based
+      Mockito.when(mockMetaData.getColumnType(col)).thenReturn(sqlTypes[i]);
+      Mockito.when(mockMetaData.getColumnTypeName(col)).thenReturn(JDBCType.valueOf(sqlTypes[i]).getName());
+      Mockito.when(mockMetaData.getColumnName(col)).thenReturn("col_" + col);
+      Mockito.when(mockMetaData.getColumnLabel(col)).thenReturn("col_" + col);
+      Mockito.when(mockMetaData.isNullable(col)).thenReturn(mockMetaData.columnNullableUnknown);
+      Mockito.when(mockMetaData.getPrecision(col)).thenReturn(0);
+      Mockito.when(mockMetaData.getScale(col)).thenReturn(0);
+    }
+    Mockito.when(mockResultSet.getMetaData()).thenReturn(mockMetaData);
+
+    for (int i = 0; i < colCount; i++) {
+      int col = i + 1;
+      Object value = values[i];
+      Mockito.when(mockResultSet.getObject(col)).thenReturn(value);
+      // Mock type-specific getters that the Arrow JDBC consumer calls.
+      // Use Number to handle both Integer and Long (JPype passes Python int as Long).
+      if (value instanceof String) {
+        Mockito.when(mockResultSet.getString(col)).thenReturn((String) value);
+      } else if (value instanceof Number) {
+        Number num = (Number) value;
+        Mockito.when(mockResultSet.getInt(col)).thenReturn(num.intValue());
+        Mockito.when(mockResultSet.getLong(col)).thenReturn(num.longValue());
+        Mockito.when(mockResultSet.getDouble(col)).thenReturn(num.doubleValue());
+      } else if (value instanceof BigDecimal) {
+        Mockito.when(mockResultSet.getBigDecimal(col)).thenReturn((BigDecimal) value);
+      } else if (value instanceof Boolean) {
+        Mockito.when(mockResultSet.getBoolean(col)).thenReturn((Boolean) value);
+      }
+    }
+
+    stubPrepareStatement(mockPreparedStatement);
+  }
+
+  /** Simulate a DDL/DML statement that returns no ResultSet (e.g. CREATE TABLE). */
+  public final void mockDDLResult(int updateCount) throws SQLException {
+    PreparedStatement mockPreparedStatement = Mockito.mock(PreparedStatement.class);
+    Mockito.when(mockPreparedStatement.execute()).thenReturn(false);
+    Mockito.when(mockPreparedStatement.getUpdateCount()).thenReturn(updateCount);
+    stubPrepareStatement(mockPreparedStatement);
   }
 }

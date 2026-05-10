@@ -18,8 +18,17 @@
 # <http://www.gnu.org/licenses/>.
 
 import jaydebeapiarrow
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
+import os
+import sys
+import threading
+from functools import partial
+
+try:
+    from test._base import _SUPPRESS_LOGGING_ARGS
+except ImportError:
+    from _base import _SUPPRESS_LOGGING_ARGS
 
 try:
     import unittest2 as unittest
@@ -30,7 +39,8 @@ class MockTest(unittest.TestCase):
 
     def setUp(self):
         self.conn = jaydebeapiarrow.connect('org.jaydebeapi.mockdriver.MockDriver',
-                                       'jdbc:jaydebeapi://dummyurl')
+                                       'jdbc:jaydebeapi://dummyurl',
+                                       jvm_args=_SUPPRESS_LOGGING_ARGS)
 
     def tearDown(self):
         self.conn.close()
@@ -61,11 +71,6 @@ class MockTest(unittest.TestCase):
                     with self.conn.cursor() as cursor:
                         cursor.execute("dummy stmt")
                         cursor.fetchone()
-                    # verify = self.conn.jconn.verifyResultSet()
-                    # verify_get = getattr(verify,
-                    #                      extra_type_mappings.get(db_api_type.group_name,
-                    #                                              'getObject'))
-                    # verify_get(1)
 
     def test_ancient_date_mapped(self):
         date = datetime(year=70, month=1, day=1).date()
@@ -96,6 +101,46 @@ class MockTest(unittest.TestCase):
             result = cursor.fetchone()
         self.assertEqual(result[0], Decimal("1234.5"))
 
+    def test_bigint_type_returns_int(self):
+        """Verify JDBC BIGINT columns return Python int, not raw java.lang.Long.
+        Regression test for legacy baztian/jaydebeapi#63."""
+        self.conn.jconn.mockBigIntResult(377518399)
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        self.assertIsInstance(result[0], int)
+        self.assertEqual(result[0], 377518399)
+
+    def test_bigint_edge_values(self):
+        """Verify BIGINT edge cases: zero, negative, min, max long values."""
+        for val in [0, -1, 9223372036854775807, -9223372036854775808]:
+            self.conn.jconn.mockBigIntResult(val)
+            with self.conn.cursor() as cursor:
+                cursor.execute("dummy stmt")
+                result = cursor.fetchone()
+            self.assertIsInstance(result[0], int)
+            self.assertEqual(result[0], val)
+
+    def test_double_type_returns_float(self):
+        """Verify JDBC DOUBLE columns return Python float, not raw java.lang.Double.
+        Regression test for legacy baztian/jaydebeapi#243."""
+        self.conn.jconn.mockDoubleResult(3.14)
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        self.assertIsInstance(result[0], float)
+        self.assertAlmostEqual(result[0], 3.14)
+
+    def test_double_edge_values(self):
+        """Verify DOUBLE edge cases: zero, negative, very large, very small."""
+        for val in [0.0, -1.5, 1.7976931348623157e+308, 4.9e-324]:
+            self.conn.jconn.mockDoubleResult(val)
+            with self.conn.cursor() as cursor:
+                cursor.execute("dummy stmt")
+                result = cursor.fetchone()
+            self.assertIsInstance(result[0], float)
+            self.assertEqual(result[0], val)
+
     def test_decimal_null_value(self):
         """SQL NULL in a DECIMAL column should return None, not crash or return 0."""
         self.conn.jconn.mockNullDecimalResult(10, 2)
@@ -109,8 +154,6 @@ class MockTest(unittest.TestCase):
         when the data exceeds the vector's configured scale."""
         import jpype
         BigDecimal = jpype.JClass("java.math.BigDecimal")
-        # Value has scale 20, but vector is configured with scale 2.
-        # HALF_UP rounds to 2 decimal places.
         value = BigDecimal("123456789012345678.12345678901234567890")
         self.conn.jconn.mockHighPrecisionDecimalResult(value, 38, 2)
         with self.conn.cursor() as cursor:
@@ -472,9 +515,34 @@ class MockTest(unittest.TestCase):
                 cursor.execute("dummy stmt")
                 self.fail("expected exception")
             except jaydebeapiarrow.InterfaceError as e:
-                # JPype 1.4.1: "java.lang.RuntimeException: expected"
-                # JPype 1.7.0+: "java.lang.java.lang.RuntimeException: java.lang.RuntimeException: expected"
                 self.assertIn("RuntimeException: expected", str(e))
+
+    def test_runtime_exception_on_execute_includes_cause_chain(self):
+        """RuntimeException with a nested cause should include the cause message."""
+        self.conn.jconn.mockExceptionOnExecuteWithCause(
+            "java.lang.RuntimeException",
+            "outer error",
+            "java.io.IOException",
+            "Connection reset by peer")
+        with self.conn.cursor() as cursor:
+            try:
+                cursor.execute("dummy stmt")
+                self.fail("expected exception")
+            except jaydebeapiarrow.InterfaceError as e:
+                msg = str(e)
+                self.assertIn("RuntimeException: outer error", msg)
+                self.assertIn("Connection reset by peer", msg)
+
+    def test_runtime_exception_on_execute_no_duplicate_classname(self):
+        """Error message should not contain duplicated Java class names."""
+        self.conn.jconn.mockExceptionOnExecute("java.lang.RuntimeException", "expected")
+        with self.conn.cursor() as cursor:
+            try:
+                cursor.execute("dummy stmt")
+                self.fail("expected exception")
+            except jaydebeapiarrow.InterfaceError as e:
+                msg = str(e)
+                self.assertNotIn("java.lang.java.lang", msg)
 
     def test_sql_exception_on_commit(self):
         self.conn.jconn.mockExceptionOnCommit("java.sql.SQLException", "expected")
@@ -490,8 +558,6 @@ class MockTest(unittest.TestCase):
             self.conn.commit()
             self.fail("expected exception")
         except jaydebeapiarrow.InterfaceError as e:
-            # JPype 1.4.1: "java.lang.RuntimeException: expected"
-            # JPype 1.7.0+: "java.lang.java.lang.RuntimeException: java.lang.RuntimeException: expected"
             self.assertIn("RuntimeException: expected", str(e))
 
     def test_sql_exception_on_rollback(self):
@@ -508,8 +574,6 @@ class MockTest(unittest.TestCase):
             self.conn.rollback()
             self.fail("expected exception")
         except jaydebeapiarrow.InterfaceError as e:
-            # JPype 1.4.1: "java.lang.RuntimeException: expected"
-            # JPype 1.7.0+: "java.lang.java.lang.RuntimeException: java.lang.RuntimeException: expected"
             self.assertIn("RuntimeException: expected", str(e))
 
     def test_cursor_with_statement(self):
@@ -521,20 +585,45 @@ class MockTest(unittest.TestCase):
 
     def test_connection_with_statement(self):
         with jaydebeapiarrow.connect('org.jaydebeapi.mockdriver.MockDriver',
-                                       'jdbc:jaydebeapi://dummyurl') as conn:
+                                       'jdbc:jaydebeapi://dummyurl',
+                                       jvm_args=_SUPPRESS_LOGGING_ARGS) as conn:
             self.assertEqual(conn._closed, False)
         self.assertEqual(conn._closed, True)
 
     # --- _to_java() parameter binding tests ---
 
     def test_to_java_none(self):
-        """None should pass through as Java null."""
+        """None should use setNull() instead of setObject() for driver
+        compatibility (e.g. Teradata rejects setObject(i, null))."""
+        import jpype
         self.conn.jconn.mockSetObjectCapture()
         with self.conn.cursor() as cursor:
             cursor.execute("dummy stmt", (None,))
         captured = self.conn.jconn.getCapturedSetObjectArgs()
-        self.assertEqual(len(captured), 1)
-        self.assertIsNone(captured[0][1])
+        self.assertEqual(len(captured), 0, "setObject should not be called for None")
+        null_captured = self.conn.jconn.getCapturedSetNullArgs()
+        self.assertEqual(len(null_captured), 1)
+        self.assertEqual(null_captured[0][0], 1)  # parameter index (1-based)
+        self.assertEqual(null_captured[0][1], jpype.java.sql.Types.NULL)
+
+    def test_to_java_none_mixed_params(self):
+        """None among non-None params should use setNull() for the None slots."""
+        import jpype
+        self.conn.jconn.mockSetObjectCapture()
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt", (42, None, "hello", None))
+        obj_captured = self.conn.jconn.getCapturedSetObjectArgs()
+        self.assertEqual(len(obj_captured), 2)
+        self.assertEqual(obj_captured[0][0], 1)
+        self.assertEqual(obj_captured[0][1], 42)
+        self.assertEqual(obj_captured[1][0], 3)
+        self.assertEqual(obj_captured[1][1], "hello")
+        null_captured = self.conn.jconn.getCapturedSetNullArgs()
+        self.assertEqual(len(null_captured), 2)
+        self.assertEqual(null_captured[0][0], 2)
+        self.assertEqual(null_captured[0][1], jpype.java.sql.Types.NULL)
+        self.assertEqual(null_captured[1][0], 4)
+        self.assertEqual(null_captured[1][1], jpype.java.sql.Types.NULL)
 
     def test_to_java_bool(self):
         """bool should pass through unchanged."""
@@ -577,6 +666,36 @@ class MockTest(unittest.TestCase):
         self.assertEqual(len(captured), 1)
         self.assertIsInstance(captured[0][1], Timestamp)
 
+    def test_to_java_datetime_preserves_microseconds(self):
+        """datetime with microseconds should preserve fractional seconds in Timestamp."""
+        import jpype
+        Timestamp = jpype.JClass("java.sql.Timestamp")
+        dt = datetime(2024, 6, 15, 10, 30, 45, 123456)
+        self.conn.jconn.mockSetObjectCapture()
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt", (dt,))
+        captured = self.conn.jconn.getCapturedSetObjectArgs()
+        self.assertEqual(len(captured), 1)
+        self.assertIsInstance(captured[0][1], Timestamp)
+        ts = captured[0][1]
+        self.assertEqual(ts.getNanos(), 123456000)
+
+    def test_to_java_datetime_mixed_params(self):
+        """datetime alongside other types should all convert correctly."""
+        import jpype
+        Timestamp = jpype.JClass("java.sql.Timestamp")
+        dt = datetime(2024, 1, 2, 3, 4, 5, 500000)
+        self.conn.jconn.mockSetObjectCapture()
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt", (42, "hello", dt, None))
+        captured = self.conn.jconn.getCapturedSetObjectArgs()
+        # None uses setNull() (not setObject), so only 3 captures
+        self.assertEqual(len(captured), 3)
+        self.assertEqual(captured[0][1], 42)
+        self.assertEqual(captured[1][1], "hello")
+        self.assertIsInstance(captured[2][1], Timestamp)
+        self.assertEqual(captured[2][1].getNanos(), 500000000)
+
     def test_to_java_date(self):
         """date should convert to java.sql.Date."""
         import jpype
@@ -594,6 +713,18 @@ class MockTest(unittest.TestCase):
         import jpype
         Time = jpype.JClass("java.sql.Time")
         t = datetime(2024, 6, 15, 10, 30, 45).time()
+        self.conn.jconn.mockSetObjectCapture()
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt", (t,))
+        captured = self.conn.jconn.getCapturedSetObjectArgs()
+        self.assertEqual(len(captured), 1)
+        self.assertIsInstance(captured[0][1], Time)
+
+    def test_to_java_time_with_microseconds(self):
+        """time with microseconds should convert to java.sql.Time without error."""
+        import jpype
+        Time = jpype.JClass("java.sql.Time")
+        t = datetime(2024, 6, 15, 10, 30, 45, 999999).time()
         self.conn.jconn.mockSetObjectCapture()
         with self.conn.cursor() as cursor:
             cursor.execute("dummy stmt", (t,))
@@ -641,14 +772,85 @@ class MockTest(unittest.TestCase):
         self.assertEqual(len(captured), 1)
         self.assertEqual(captured[0][1], "hello")
 
-    def test_to_java_list_raises_not_supported(self):
-        """list should raise NotSupportedError for ARRAY binding."""
+    def test_to_java_int_list_binds_as_array(self):
+        """Integer list should be converted to Java int[] and bound via setObject."""
         self.conn.jconn.mockSetObjectCapture()
         with self.conn.cursor() as cursor:
-            with self.assertRaises(jaydebeapiarrow.NotSupportedError):
-                cursor.execute("dummy stmt", ([1, 2, 3],))
+            cursor.execute("dummy stmt", ([1, 2, 3],))
+        captured = self.conn.jconn.getCapturedSetObjectArgs()
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0][0], 1)  # parameter index (1-based)
+        import jpype
+        self.assertIsInstance(captured[0][1], jpype.JArray)
+
+    def test_to_java_string_list_binds_as_array(self):
+        """String list should be converted to Java String[] and bound via setObject."""
+        self.conn.jconn.mockSetObjectCapture()
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt", (["foo", "bar"],))
+        captured = self.conn.jconn.getCapturedSetObjectArgs()
+        self.assertEqual(len(captured), 1)
+        import jpype
+        self.assertIsInstance(captured[0][1], jpype.JArray)
+
+    def test_to_java_empty_list_binds_as_array(self):
+        """Empty list should be converted to empty Java String[]."""
+        self.conn.jconn.mockSetObjectCapture()
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt", ([],))
+        captured = self.conn.jconn.getCapturedSetObjectArgs()
+        self.assertEqual(len(captured), 1)
+        import jpype
+        self.assertIsInstance(captured[0][1], jpype.JArray)
+
+    # --- Binary data round-trip tests ---
+
+    def test_binary_non_utf8_bytes_preserved(self):
+        """Binary data containing non-UTF-8 bytes must round-trip without loss.
+        Verifies the fix for legacy issue baztian/jaydebeapi#147 where binary
+        data was incorrectly decoded as UTF-8 strings."""
+        import jpype
+        test_data = bytes([0x00, 0x01, 0x02, 0x80, 0xff, 0xfe])
+        java_bytes = jpype.JArray(jpype.JByte)(
+            [b - 256 if b > 127 else b for b in test_data])
+        self.conn.jconn.mockBinaryResult(java_bytes)
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        self.assertIsInstance(result[0], bytes)
+        self.assertEqual(result[0], test_data)
+
+    def test_binary_all_byte_values(self):
+        """All 256 byte values should round-trip correctly."""
+        import jpype
+        test_data = bytes(range(256))
+        java_bytes = jpype.JArray(jpype.JByte)(
+            [b - 256 if b > 127 else b for b in test_data])
+        self.conn.jconn.mockBinaryResult(java_bytes)
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        self.assertEqual(result[0], test_data)
+
+    def test_binary_empty(self):
+        """Empty binary data should round-trip correctly."""
+        import jpype
+        java_bytes = jpype.JArray(jpype.JByte)(0)
+        self.conn.jconn.mockBinaryResult(java_bytes)
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        self.assertEqual(result[0], b'')
 
     # --- DBAPITypeObject mapping tests ---
+
+    def test_description_returns_column_label_not_name(self):
+        """cursor.description should return the column label (AS alias),
+        not the underlying column name from the table."""
+        self.conn.jconn.mockColumnAlias("real_column", "alias_col")
+        with self.conn.cursor() as cursor:
+            cursor.execute("SELECT real_column AS alias_col FROM t")
+            self.assertEqual(cursor.description[0][0], "alias_col")
 
     def test_dbapi_type_other_maps_to_string(self):
         """JDBC OTHER should map to STRING type code."""
@@ -677,3 +879,463 @@ class MockTest(unittest.TestCase):
         Types = jpype.java.sql.Types
         result = jaydebeapiarrow.DBAPITypeObject._map_jdbc_type_to_dbapi(Types.ROWID)
         self.assertIs(result, jaydebeapiarrow.ROWID)
+
+    # --- Timestamp sub-second leading zero tests (legacy #44) ---
+
+    def test_timestamp_leading_zero_subsecond_096ms(self):
+        """Regression: .096 ms must not become .96 ms (legacy #44)."""
+        import jpype
+        LocalDateTime = jpype.JClass("java.time.LocalDateTime")
+        ldt = LocalDateTime.of(2017, 6, 19, 15, 30, 0, 96_965_169)
+        self.conn.jconn.mockTimestampResult(ldt)
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        self.assertEqual(result[0].microsecond, 96965)
+
+    def test_timestamp_leading_zero_000001us(self):
+        """Timestamp with .000001 sub-seconds — minimal non-zero case."""
+        import jpype
+        LocalDateTime = jpype.JClass("java.time.LocalDateTime")
+        ldt = LocalDateTime.of(2020, 1, 1, 0, 0, 0, 1_000)
+        self.conn.jconn.mockTimestampResult(ldt)
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        self.assertEqual(result[0].microsecond, 1)
+
+    def test_timestamp_leading_zero_001ms(self):
+        """Timestamp with .001 ms — another leading-zero case."""
+        import jpype
+        LocalDateTime = jpype.JClass("java.time.LocalDateTime")
+        ldt = LocalDateTime.of(2021, 3, 15, 12, 0, 0, 1_000_000)
+        self.conn.jconn.mockTimestampResult(ldt)
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        self.assertEqual(result[0].microsecond, 1000)
+
+    def test_timestamp_leading_zero_099999ms(self):
+        """Timestamp with .099999 sub-seconds — leading zero + all 9s."""
+        import jpype
+        LocalDateTime = jpype.JClass("java.time.LocalDateTime")
+        ldt = LocalDateTime.of(2019, 7, 4, 10, 30, 0, 99_999_000)
+        self.conn.jconn.mockTimestampResult(ldt)
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        self.assertEqual(result[0].microsecond, 99999)
+
+    # --- Timestamp microsecond precision tests (legacy issue #229) ---
+
+    def test_timestamp_microsecond_precision_200000(self):
+        """200000 microseconds (0.200000s) should round-trip correctly.
+        Regression test for baztian/jaydebeapi#229."""
+        import jpype
+        LocalDateTime = jpype.JClass("java.time.LocalDateTime")
+        ldt = LocalDateTime.of(2023, 5, 16, 18, 23, 15, 200_000_000)
+        self.conn.jconn.mockTimestampResult(ldt)
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        expected = datetime(2023, 5, 16, 18, 23, 15, 200000)
+        self.assertEqual(result[0], expected)
+
+    def test_timestamp_microsecond_precision_90000(self):
+        """90000 microseconds (0.090000s) should round-trip correctly.
+        Regression test for baztian/jaydebeapi#229."""
+        import jpype
+        LocalDateTime = jpype.JClass("java.time.LocalDateTime")
+        ldt = LocalDateTime.of(2023, 5, 16, 18, 23, 15, 90_000_000)
+        self.conn.jconn.mockTimestampResult(ldt)
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        expected = datetime(2023, 5, 16, 18, 23, 15, 90000)
+        self.assertEqual(result[0], expected)
+
+    def test_timestamp_microsecond_precision_123456(self):
+        """123456 microseconds (0.123456s) should round-trip correctly.
+        Regression test for baztian/jaydebeapi#229."""
+        import jpype
+        LocalDateTime = jpype.JClass("java.time.LocalDateTime")
+        ldt = LocalDateTime.of(2023, 5, 16, 18, 23, 15, 123_456_000)
+        self.conn.jconn.mockTimestampResult(ldt)
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        expected = datetime(2023, 5, 16, 18, 23, 15, 123456)
+        self.assertEqual(result[0], expected)
+
+    def test_timestamp_microsecond_precision_zero(self):
+        """0 microseconds should round-trip correctly."""
+        import jpype
+        LocalDateTime = jpype.JClass("java.time.LocalDateTime")
+        ldt = LocalDateTime.of(2023, 5, 16, 18, 23, 15, 0)
+        self.conn.jconn.mockTimestampResult(ldt)
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        expected = datetime(2023, 5, 16, 18, 23, 15, 0)
+        self.assertEqual(result[0], expected)
+
+    def test_timestamp_microsecond_precision_999999(self):
+        """999999 microseconds (max precision) should round-trip correctly."""
+        import jpype
+        LocalDateTime = jpype.JClass("java.time.LocalDateTime")
+        ldt = LocalDateTime.of(2023, 5, 16, 18, 23, 15, 999_999_000)
+        self.conn.jconn.mockTimestampResult(ldt)
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        expected = datetime(2023, 5, 16, 18, 23, 15, 999999)
+        self.assertEqual(result[0], expected)
+
+    # --- Timestamp timezone preservation tests (legacy issue #73) ---
+
+    def test_timestamp_returns_naive_datetime(self):
+        """TIMESTAMP columns must return naive Python datetime objects."""
+        self.conn.jconn.mockType("TIMESTAMP")
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        self.assertIsInstance(result[0], datetime)
+        self.assertIsNone(result[0].tzinfo,
+                          "TIMESTAMP must return naive datetime, not timezone-aware")
+        self.assertEqual(result[0], datetime(2009, 12, 1, 8, 20, 45))
+
+    def test_timestamp_utc_boundary_value(self):
+        """TIMESTAMP at UTC midnight must not shift to previous day."""
+        import jpype
+        localDT = jpype.java.time.LocalDateTime.of(2024, 1, 15, 0, 0, 0)
+        self.conn.jconn.mockTimestampResult(localDT)
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        self.assertEqual(result[0], datetime(2024, 1, 15, 0, 0, 0))
+
+    def test_timestamp_end_of_day_value(self):
+        """TIMESTAMP near end of day must not overflow to next day."""
+        self.conn.jconn.mockType("TIMESTAMP")
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        self.assertEqual(result[0].year, 2009)
+        self.assertEqual(result[0].month, 12)
+        self.assertEqual(result[0].day, 1)
+        self.assertEqual(result[0].hour, 8)
+        self.assertEqual(result[0].minute, 20)
+        self.assertEqual(result[0].second, 45)
+
+    # --- JPype API deprecation tests ---
+
+    def test_no_deprecated_thread_attachment_api(self):
+        """Verify that connect() does not use the deprecated
+        jpype.attachThreadToJVM()."""
+        import inspect
+        source = inspect.getsource(jaydebeapiarrow)
+        self.assertNotIn('attachThreadToJVM', source,
+                         'Deprecated jpype.attachThreadToJVM() must not be used')
+
+    def test_connect_no_deprecation_warnings(self):
+        """Verify that connecting via the mock driver emits no
+        DeprecationWarnings from JPype."""
+        import warnings
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            self.conn = jaydebeapiarrow.connect(
+                'org.jaydebeapi.mockdriver.MockDriver',
+                'jdbc:jaydebeapi://dummyurl',
+                jvm_args=_SUPPRESS_LOGGING_ARGS)
+        jpype_warnings = [w for w in caught
+                          if issubclass(w.category, DeprecationWarning)
+                          and 'jpype' in str(w.message).lower()]
+        self.assertEqual(
+            len(jpype_warnings), 0,
+            f'Unexpected JPype deprecation warnings: '
+            f'{[str(w.message) for w in jpype_warnings]}')
+
+    # --- Non-ASCII character round-trip tests (legacy issue #176) ---
+
+    def test_varchar_german_umlauts(self):
+        """VARCHAR columns with German umlauts must round-trip correctly."""
+        self.conn.jconn.mockStringResult("Grüße aus München")
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        self.assertEqual(result[0], "Grüße aus München")
+
+    def test_varchar_cjk_characters(self):
+        """VARCHAR columns with CJK characters must round-trip correctly."""
+        self.conn.jconn.mockStringResult("你好世界")
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        self.assertEqual(result[0], "你好世界")
+
+    def test_varchar_mixed_scripts(self):
+        """VARCHAR columns with mixed scripts and symbols must round-trip correctly."""
+        self.conn.jconn.mockStringResult("café — résumé — naïve")
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        self.assertEqual(result[0], "café — résumé — naïve")
+
+    def test_varchar_emoji(self):
+        """VARCHAR columns with emoji must round-trip correctly."""
+        self.conn.jconn.mockStringResult("Hello 🌍🌍")
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        self.assertEqual(result[0], "Hello 🌍🌍")
+
+    # --- Long query string tests (legacy issue #91) ---
+
+    def test_long_query_string_18k_characters(self):
+        """SQL strings of 18k+ characters must pass through execute()
+        and return correct values."""
+        self.conn.jconn.mockBigDecimalResult(1, 0)
+        long_query = ("SELECT * FROM t WHERE id IN ("
+                      + ",".join(str(i) for i in range(5000)) + ")")
+        self.assertGreater(len(long_query), 18000)
+        with self.conn.cursor() as cursor:
+            cursor.execute(long_query)
+            result = cursor.fetchone()
+        self.assertEqual(result[0], 1)
+
+    # --- Memory leak regression tests (legacy #227) ---
+
+    def test_cursor_close_after_partial_fetch(self):
+        """Closing a cursor after a partial fetch should not leak the iterator."""
+        self.conn.jconn.mockType("INTEGER")
+        cursor = self.conn.cursor()
+        cursor.execute("dummy stmt")
+        cursor.fetchone()
+        cursor.close()
+        self.assertIsNone(cursor._iter)
+        self.assertEqual(cursor._buffer, [])
+        self.assertIsNone(cursor._connection)
+
+    def test_repeated_query_cycles_no_accumulation(self):
+        """Repeated execute/close cycles should not accumulate stale iterators."""
+        self.conn.jconn.mockType("INTEGER")
+        for _ in range(10):
+            cursor = self.conn.cursor()
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+            self.assertIsNotNone(result)
+            cursor.close()
+            self.assertIsNone(cursor._iter)
+            self.assertEqual(cursor._buffer, [])
+
+    def test_close_last_idempotent(self):
+        """Calling _close_last multiple times should not raise."""
+        self.conn.jconn.mockType("INTEGER")
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            cursor.fetchone()
+            cursor._close_last()
+            cursor._close_last()
+            self.assertIsNone(cursor._iter)
+
+    # --- JPype compatibility tests (legacy issue #253) ---
+
+    def test_is_jvm_started_with_api_present(self):
+        """_is_jvm_started() returns True when JVM is running via the standard API."""
+        result = jaydebeapiarrow._is_jvm_started()
+        self.assertTrue(result, "JVM should be started during mock tests")
+
+    def test_is_jvm_started_fallback_without_public_api(self):
+        """_is_jvm_started() falls back to internal state when isJVMStarted is missing."""
+        import jpype
+        original = getattr(jpype, 'isJVMStarted', None)
+        try:
+            delattr(jpype, 'isJVMStarted')
+            result = jaydebeapiarrow._is_jvm_started()
+            self.assertTrue(result,
+                             "Fallback must return True when JVM is running")
+        finally:
+            if original is not None:
+                jpype.isJVMStarted = original
+
+    # --- VARCHAR data tests ---
+
+    def test_varchar_returns_data_not_empty(self):
+        """Verify VARCHAR columns return actual data, not empty strings."""
+        self.conn.jconn.mockType("VARCHAR")
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        self.assertIsInstance(result[0], str)
+        self.assertEqual(result[0], "DummyString")
+        self.assertNotEqual(result[0], "")
+
+    def test_varchar_with_multicolumn_result(self):
+        """Verify VARCHAR data is returned correctly alongside numeric columns."""
+        import jpype
+        Types = jpype.java.sql.Types
+
+        self.conn.jconn.mockMultiColumnResult(
+            [Types.INTEGER, Types.VARCHAR],
+            [42, "Hello World"]
+        )
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            result = cursor.fetchone()
+        self.assertEqual(result[0], 42)
+        self.assertEqual(result[1], "Hello World")
+
+    # --- SQLXML type tests ---
+
+    def test_sqlxml_column_returns_string(self):
+        """SQLXML columns should return Python strings, not Java objects."""
+        self.conn.jconn.mockType("SQLXML")
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            row = cursor.fetchone()
+            self.assertIsInstance(row[0], str)
+            self.assertEqual(row[0], "DummyString")
+
+    # --- Autocommit skip tests (issue #78) ---
+
+    def test_commit_skipped_when_autocommit_enabled(self):
+        """commit() should be a no-op when autocommit is enabled."""
+        self.conn.jconn.mockAutoCommit(True)
+        self.conn.jconn.mockExceptionOnCommit("java.sql.SQLException",
+                                               "Cannot commit when autoCommit is enabled.")
+        self.conn.commit()  # must not raise
+
+    def test_commit_called_when_autocommit_disabled(self):
+        """commit() should call jconn.commit() when autocommit is disabled."""
+        self.conn.jconn.mockAutoCommit(False)
+        self.conn.commit()
+
+    def test_rollback_skipped_when_autocommit_enabled(self):
+        """rollback() should be a no-op when autocommit is enabled."""
+        self.conn.jconn.mockAutoCommit(True)
+        self.conn.jconn.mockExceptionOnRollback("java.sql.SQLException",
+                                                 "Cannot rollback when autoCommit is enabled.")
+        self.conn.rollback()  # must not raise
+
+    def test_rollback_called_when_autocommit_disabled(self):
+        """rollback() should call jconn.rollback() when autocommit is disabled."""
+        self.conn.jconn.mockAutoCommit(False)
+        self.conn.rollback()
+
+    def test_lastrowid_exists_and_is_none(self):
+        """PEP-249: lastrowid attribute must exist on cursor (fixes #84)."""
+        with self.conn.cursor() as cursor:
+            self.assertIsNone(cursor.lastrowid)
+
+    def test_lastrowid_none_after_select(self):
+        """lastrowid should be None after a SELECT query."""
+        self.conn.jconn.mockBigDecimalResult(1, 0)
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            cursor.fetchone()
+            self.assertIsNone(cursor.lastrowid)
+
+    def test_lastrowid_none_after_insert(self):
+        """lastrowid is None after INSERT with no auto-generated keys (mock has no identity column)."""
+        self.conn.jconn.mockBigDecimalResult(1, 0)
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            self.assertIsNone(cursor.lastrowid)
+
+    def test_lastrowid_none_after_executemany(self):
+        """lastrowid should be None after executemany (mock driver limitation: skip)."""
+        self.skipTest("Mock driver executeBatch returns None; covered by integration test")
+
+    # --- JDBC exception during fetch tests (legacy #58) ---
+
+    def test_sql_exception_on_fetch_raises_database_error(self):
+        """SQLException during fetch should raise DatabaseError, not raw Java exception.
+
+        Regression test for legacy issue baztian/jaydebeapi#58 where JDBC driver
+        exceptions (e.g., divide-by-zero in calculated columns) propagated as
+        raw Java exceptions through fetchone() instead of proper Python DatabaseError.
+        The Arrow JDBC library wraps SQLExceptions in JdbcConsumerException, so
+        the handler must walk the cause chain to find the original SQL error."""
+        self.conn.jconn.mockExceptionOnFetch("java.sql.SQLException", "Division by zero")
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            with self.assertRaises(jaydebeapiarrow.DatabaseError):
+                cursor.fetchone()
+
+    def test_runtime_exception_on_fetch_raises_interface_error(self):
+        """Non-SQL Java exceptions during fetch should raise InterfaceError."""
+        self.conn.jconn.mockExceptionOnFetch("java.lang.RuntimeException", "driver error")
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            with self.assertRaises(jaydebeapiarrow.InterfaceError):
+                cursor.fetchone()
+
+    def test_sql_exception_on_fetchall_raises_database_error(self):
+        """SQLException during fetchall should raise DatabaseError."""
+        self.conn.jconn.mockExceptionOnFetch("java.sql.SQLException", "Data conversion error")
+        with self.conn.cursor() as cursor:
+            cursor.execute("dummy stmt")
+            with self.assertRaises(jaydebeapiarrow.DatabaseError):
+                cursor.fetchall()
+
+
+class ParallelConnectTest(unittest.TestCase):
+    """Test that parallel connect() calls are thread-safe (issue #60)."""
+
+    def test_parallel_connects_after_jvm_started(self):
+        """Multiple threads connecting simultaneously should not crash."""
+        errors = []
+
+        def connect_thread(idx):
+            import jpype
+            try:
+                conn = jaydebeapiarrow.connect(
+                    'org.jaydebeapi.mockdriver.MockDriver',
+                    'jdbc:jaydebeapi://dummyurl%d' % idx)
+                # Verify the connection is usable
+                self.assertIsNotNone(conn)
+                conn.close()
+            except Exception as e:
+                errors.append(e)
+            finally:
+                if jpype.java.lang.Thread.isAttached():
+                    jpype.java.lang.Thread.detach()
+
+        threads = []
+        for i in range(5):
+            t = threading.Thread(target=partial(connect_thread, i))
+            threads.append(t)
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [], f"Thread errors: {errors}")
+
+    def test_jvm_startup_lock_exists(self):
+        """The _jvm_startup_lock should be a threading.Lock."""
+        self.assertTrue(hasattr(jaydebeapiarrow, '_jvm_startup_lock'))
+        self.assertIsInstance(jaydebeapiarrow._jvm_startup_lock, type(threading.Lock()))
+        self.assertTrue(hasattr(jaydebeapiarrow, '_jvm_starting'))
+
+
+class ConnectValidationTest(unittest.TestCase):
+    """Tests for connect() argument validation (issue #95)."""
+
+    def test_url_must_be_string_not_list(self):
+        """Passing a list as url should raise ProgrammingError."""
+        with self.assertRaises(jaydebeapiarrow.ProgrammingError) as ctx:
+            jaydebeapiarrow.connect(
+                'org.jaydebeapi.mockdriver.MockDriver',
+                ['jdbc:jaydebeapi://dummyurl', 'user', 'pass']
+            )
+        self.assertIn('url', str(ctx.exception).lower())
+
+    def test_url_must_be_string_not_dict(self):
+        """Passing a dict as url should raise ProgrammingError."""
+        with self.assertRaises(jaydebeapiarrow.ProgrammingError) as ctx:
+            jaydebeapiarrow.connect(
+                'org.jaydebeapi.mockdriver.MockDriver',
+                {'user': 'sa', 'password': ''}
+            )
+        self.assertIn('url', str(ctx.exception).lower())
