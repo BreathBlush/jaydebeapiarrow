@@ -893,8 +893,11 @@ class Cursor(object):
         self.lastrowid = None
         try:
             self._prep = self._connection.jconn.prepareStatement(operation, 1)
-        except:
-            _handle_sql_exception()
+        except Exception:
+            try:
+                self._prep = self._connection.jconn.prepareStatement(operation)
+            except:
+                _handle_sql_exception()
         self._set_stmt_parms(self._prep, parameters, is_batch=False)
         try:
             is_rs = self._prep.execute()
@@ -909,7 +912,9 @@ class Cursor(object):
             try:
                 gk_rs = self._prep.getGeneratedKeys()
                 if gk_rs.next():
-                    self.lastrowid = gk_rs.getObject(1)
+                    val = gk_rs.getObject(1)
+                    if isinstance(val, int):
+                        self.lastrowid = val
             except Exception:
                 pass
         # self._prep.getWarnings() ???
@@ -919,8 +924,11 @@ class Cursor(object):
         self.lastrowid = None
         try:
             self._prep = self._connection.jconn.prepareStatement(operation, 1)
-        except:
-            _handle_sql_exception()
+        except Exception:
+            try:
+                self._prep = self._connection.jconn.prepareStatement(operation)
+            except:
+                _handle_sql_exception()
         self._set_stmt_parms(self._prep, seq_of_parameters, is_batch=True)
         try:
             update_counts = self._prep.executeBatch()
