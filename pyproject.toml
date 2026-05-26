@@ -35,7 +35,6 @@ dependencies = [
     "pyarrow>=16.0.0",
     "numpy",
     "cffi",
-    "bump-my-version",
 ]
 
 [project.urls]
@@ -46,6 +45,7 @@ pandas = ["pandas"]
 
 [dependency-groups]
 dev = [
+    "bump-my-version",
     "coverage>=4.5",
     "jaydebeapi>=1.2.3",
     "mkdocs>=1.6",
