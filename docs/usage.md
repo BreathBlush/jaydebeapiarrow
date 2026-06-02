@@ -19,7 +19,7 @@ pip install jaydebeapiarrow[pandas]   # pandas DataFrame support
 ```bash
 git clone https://github.com/HenryNebula/jaydebeapiArrow.git
 cd jaydebeapiArrow
-uv sync --group dev        # or: pip install -e ".[dev]"
+uv sync --group dev
 ```
 
 ## Drop-In Replacement
