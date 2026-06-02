@@ -11,7 +11,13 @@ Requires Python 3.9+ and a JDK (8+). JPype and PyArrow are installed automatical
 ### Optional extras
 
 ```bash
-pip install jaydebeapiarrow[pandas]   # pandas DataFrame support
+pip install "JayDeBeApiArrow[pandas]"   # pandas DataFrame support
+```
+
+Or with uv:
+
+```bash
+uv add "JayDeBeApiArrow[pandas]"
 ```
 
 ### Development
