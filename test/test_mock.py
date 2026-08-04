@@ -880,6 +880,44 @@ class MockTest(unittest.TestCase):
         result = jaydebeapiarrow.DBAPITypeObject._map_jdbc_type_to_dbapi(Types.ROWID)
         self.assertIs(result, jaydebeapiarrow.ROWID)
 
+    # --- DBAPITypeObject hashability tests (issue #115) ---
+
+    def test_dbapi_type_object_is_hashable(self):
+        """DBAPITypeObject instances must be hashable (issue #115).
+
+        Defining __eq__ without __hash__ makes instances unhashable, which
+        breaks SQLAlchemy 2.x result-set caching that uses the type object
+        as a cache key."""
+        for type_obj in (jaydebeapiarrow.STRING, jaydebeapiarrow.NUMBER,
+                         jaydebeapiarrow.DATETIME, jaydebeapiarrow.BINARY):
+            self.assertEqual(hash(type_obj), hash(type_obj))
+
+    def test_dbapi_type_object_hash_consistent_with_eq(self):
+        """Equal objects must have equal hashes (Python data model contract).
+
+        Constructs a second DBAPITypeObject with the same group_name as
+        STRING but no values (so it does not collide with STRING's registered
+        type-name mappings). Equality is by group_name, so the hashes must
+        match."""
+        duplicate = jaydebeapiarrow.DBAPITypeObject('STRING')
+        self.assertEqual(jaydebeapiarrow.STRING, duplicate)
+        self.assertEqual(hash(jaydebeapiarrow.STRING), hash(duplicate))
+
+    def test_dbapi_type_object_hash_distinguishes_groups(self):
+        """Different type groups should produce different hashes in practice."""
+        hashes = {hash(jaydebeapiarrow.STRING), hash(jaydebeapiarrow.NUMBER),
+                  hash(jaydebeapiarrow.DATETIME), hash(jaydebeapiarrow.BINARY),
+                  hash(jaydebeapiarrow.TEXT), hash(jaydebeapiarrow.DECIMAL)}
+        self.assertEqual(len(hashes), 6)
+
+    def test_dbapi_type_object_usable_as_dict_key(self):
+        """DBAPITypeObject should be usable as a dict key (SQLAlchemy cache
+        pattern)."""
+        cache = {jaydebeapiarrow.STRING: "string_processor",
+                 jaydebeapiarrow.NUMBER: "number_processor"}
+        self.assertEqual(cache[jaydebeapiarrow.STRING], "string_processor")
+        self.assertEqual(cache[jaydebeapiarrow.NUMBER], "number_processor")
+
     # --- Timestamp sub-second leading zero tests (legacy #44) ---
 
     def test_timestamp_leading_zero_subsecond_096ms(self):
